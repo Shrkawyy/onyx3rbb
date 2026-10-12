@@ -1,0 +1,177 @@
+@import url('./lobby.css?v=6.0.9');
+@import url('./settings.css');
+@import url('./reconnect.css');
+@import url('./hud-layout.css');
+
+:root {
+    --teal-dark:   #071e22;
+    --teal-mid:    #0d3d44;
+    --teal-light:  #1a7a7a;
+    --teal-bright: #2dd4bf;
+    --teal-accent: #14b8a6;
+    --text-main:   #ffffff;
+    --text-dim:    #8ecfce;
+    --panel-dark:  rgba(8,16,20,0.95);
+    --panel-border:rgba(45,212,191,0.18);
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Titillium+Web:wght@300;400;600;700&family=Open+Sans:wght@300;400&display=swap');
+
+* { margin:0; padding:0; box-sizing:border-box; font-family:'Titillium Web',sans-serif; }
+
+html, body {
+    background: var(--teal-dark);
+    color: var(--text-main);
+    overflow: hidden;
+    height: 100%;
+    width: 100%;
+}
+
+.fullscreen-root {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: visible; /* hidden'dan visible'a çevir */
+    user-select: none;
+}
+
+
+.game-canvas {
+    position: absolute;
+    left: 0; top: 0;
+    z-index: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* HUDs */
+.hud-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.hud-server-timer {
+    position: absolute;
+    top: calc(20px * var(--scale,1));
+    left: 50%;
+    transform: translateX(-50%) scale(var(--scale,1));
+    transform-origin: top center;
+    background: rgba(0,0,0,0.5);
+    padding: 8px 16px;
+    border-radius: 9999px;
+    font-size: 18px;
+    font-weight: 300;
+    color: white;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.hud-leaderboard {
+    position: absolute;
+    top: calc(20px * var(--scale,1));
+    right: calc(20px * var(--scale,1));
+    transform: scale(var(--scale,1));
+    transform-origin: top right;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    font-family: 'Titillium Web', sans-serif;
+    font-weight: 300;
+    pointer-events: none;
+}
+
+.hud-leaderboard .lb-header {
+    color: var(--teal-bright);
+    font-size: calc(8px + .5vh);
+    margin-bottom: 5px;
+    text-shadow: 0 0 12px rgba(45,212,191,0.6);
+    text-align: right;
+    font-family: 'Titillium Web', sans-serif;
+    font-weight: 300;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.hud-leaderboard .lb-content { display:flex; flex-direction:column; align-items:flex-end; }
+
+.hud-leaderboard .lb-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: white;
+    font-size: calc(8px + .5vh);
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+    margin-bottom: 2px;
+    font-family: 'Titillium Web', sans-serif;
+    font-weight: 300;
+}
+
+.hud-leaderboard .lb-position { color:var(--teal-bright); font-weight:300; margin-left:auto; }
+.hud-leaderboard .lb-name    { color:white; font-weight:300; flex-shrink:0; }
+.hud-leaderboard .lb-mass    {
+    font-weight:300;
+    flex-shrink:0;
+    display:inline-block;
+    transform: scale(var(--jax-score-scale,1));
+    transform-origin: right center;
+}
+
+.pause-hud {
+    position: absolute;
+    top: 15%;
+    left: 50%;
+    transform: translate(-50%,0);
+    font-size: 32px;
+    color: var(--teal-bright);
+    font-weight: 300;
+    text-shadow: 0 0 20px rgba(45,212,191,0.8);
+    pointer-events: none;
+    z-index: 50;
+    letter-spacing: 4px;
+    text-align: center;
+    animation: pausePulse 2s infinite ease-in-out;
+}
+
+.pause-hud i { display:block; font-size:48px; margin-bottom:5px; color:var(--teal-accent); }
+
+@keyframes pausePulse {
+    0%,100%{ transform:translate(-50%,0) scale(1); opacity:0.7; }
+    50%    { transform:translate(-50%,0) scale(1.1); opacity:1; }
+}
+
+.pe-none { pointer-events:none; }
+.pe-all  { pointer-events:all; }
+
+/* Toast */
+#toast-container {
+    position:fixed; top:24px; right:24px;
+    z-index:99999;
+    display:flex; flex-direction:column; gap:10px;
+    pointer-events:none;
+}
+
+.toast-item {
+    background: rgba(8,30,34,0.95);
+    border: 1px solid var(--teal-accent);
+    border-radius:8px;
+    padding: 12px 20px;
+    color:#fff;
+    font-size:14px;
+    font-weight:300;
+    display:flex; align-items:center; gap:10px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    pointer-events:all;
+}
+
+.toast-close {
+    background:none; border:none; color:#aaa;
+    cursor:pointer; font-size:16px; margin-left:auto;
+}
+
+.toast-close:hover { color:#fff; }

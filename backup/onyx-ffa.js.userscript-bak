@@ -1,0 +1,899 @@
+/**
+ * ONYX FFA client.
+ *
+ * index.html → onyx-ffa.js → isolated codec worker (bundle.wasm) → wss://eu1.senpa.io:7101
+ *
+ * Jaxx/og is protocol source only. The Jaxx lobby, bundle.js app, iframe, and
+ * page-global WebSocket hook must not run next to deo.onyx.beautified.js.
+ */
+(function (global) {
+  'use strict';
+
+  var FFA_ID = 'ffa-eu';
+  var FFA_VALUE = 'ffa-eu';
+  var FFA_TYPE = 'ffa';
+  var FFA_HOST = 'eu1.senpa.io:7101';
+  var FFA_WS = 'wss://eu1.senpa.io:7101';
+  var LEGACY_EU = 'eu.senpa.io:2001';
+  var AUTH_ORIGIN = 'https://api.senpa.io';
+  var SESSION_KEY = 'senpaio:session';
+  var TOKEN_KEY = 'senpa_auth_token';
+  var TID_KEY = '__ONYX_FFA_TID__';
+  var CAPTCHA_SITE_KEY = '0x4AAAAAAACWFDYFT_opGqX8';
+  var WORKER_URL = 'ffa/onyx-ffa-codec-worker.js';
+
+  var playing = false;
+  var lastPhase = 'IDLE';
+  var worker = null;
+  var workerReady = false;
+  var socketOpen = false;
+  var authCompleted = false;
+  var clientReady = false;
+  var worldSeen = false;
+  var spawned = false;
+  var pingTimer = null;
+  var spawnTimer = null;
+  var clientId = 0;
+  var playerIds = [];
+  var activeTab = 0;
+  var cells = Object.create(null);
+  var ownCells = [];
+  var players = Object.create(null);
+  var border = 0;
+  var mouseX = 0;
+  var mouseY = 0;
+  var rafId = 0;
+  var turnstilePending = false;
+
+  function log(msg) {
+    console.log('[FFA]', msg);
+  }
+
+  function fail(code, msg, extra) {
+    console.error('[FFA ERROR]', code, msg || '');
+    if (extra) console.error('[FFA ERROR]', extra);
+    toast(code + (msg ? (': ' + msg) : ''), true);
+  }
+
+  function toast(text, isError) {
+    try {
+      var el = document.getElementById('onyx-ffa-status');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'onyx-ffa-status';
+        el.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:2147483646;padding:8px 14px;border-radius:8px;font:600 12px/1.4 Segoe UI,system-ui,sans-serif;pointer-events:none;max-width:min(720px,92vw);text-align:center';
+        document.body.appendChild(el);
+      }
+      el.textContent = text;
+      el.style.background = isError ? 'rgba(90,20,20,.92)' : 'rgba(12,22,18,.92)';
+      el.style.color = isError ? '#ffb4b4' : '#b7f0c8';
+      el.style.display = 'block';
+    } catch (_) {}
+  }
+
+  function snapshotGlobals(label) {
+    try {
+      log('globals ' + label + ' Module=' + (typeof global.Module) +
+        ' WebSocket=' + ((global.WebSocket && global.WebSocket.name) || typeof global.WebSocket) +
+        ' hooked=' + !!(global.WebSocket && global.WebSocket.__onyxFfaHook) +
+        ' app=' + (typeof global.app) +
+        ' Client=' + (typeof global.Client) +
+        ' Connection=' + (typeof global.Connection));
+    } catch (_) {}
+  }
+
+  function isFfaValue(value) {
+    if (!value) return false;
+    if (typeof value === 'object') {
+      if (value.type === FFA_TYPE || value.id === FFA_ID) return true;
+      value = value.value || value.host || value.wsUrl || '';
+    }
+    var v = String(value);
+    if (v === FFA_VALUE || v === FFA_ID || v === FFA_HOST || v === FFA_WS) return true;
+    if (v.indexOf('ffa:') === 0) return true;
+    if (v.indexOf('eu1.senpa.io:7101') !== -1) return true;
+    return false;
+  }
+
+  function selectedOption() {
+    var sel = document.getElementById('servers');
+    if (!sel) return null;
+    return sel.options[sel.selectedIndex] || null;
+  }
+
+  function selectedServer() {
+    var sel = document.getElementById('servers');
+    return sel ? sel.value : '';
+  }
+
+  function isFfaSelected() {
+    var opt = selectedOption();
+    if (opt && opt.getAttribute('data-onyx-type') === FFA_TYPE) return true;
+    return isFfaValue(selectedServer());
+  }
+
+  function sanitizeLegacyServerStore() {
+    for (var i = localStorage.length - 1; i >= 0; i--) {
+      var key = localStorage.key(i);
+      var raw = localStorage.getItem(key);
+      if (!raw) continue;
+      if (raw.indexOf('eu1.senpa.io') === -1 && raw.indexOf('ffa:') === -1 && raw.indexOf('ffa-eu') === -1) continue;
+      try {
+        var obj = JSON.parse(raw);
+        if (obj && typeof obj === 'object' && isFfaValue(obj.server)) {
+          obj.server = LEGACY_EU;
+          localStorage.setItem(key, JSON.stringify(obj));
+        }
+      } catch (_) {}
+    }
+  }
+  try { sanitizeLegacyServerStore(); } catch (_) {}
+
+  document.addEventListener('change', function (e) {
+    var sel = e.target;
+    if (!sel || sel.id !== 'servers') return;
+    var opt = sel.options[sel.selectedIndex];
+    var ffa = (opt && opt.getAttribute('data-onyx-type') === FFA_TYPE) || isFfaValue(sel.value);
+    if (ffa) {
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (playing) stop('switch-legacy');
+  }, true);
+
+  function normalizeToken(raw) {
+    return String(raw || '').trim().replace(/^["']|["']$/g, '');
+  }
+
+  function decodeJwtPayload(token) {
+    var parts = String(token || '').split('.');
+    if (parts.length < 2) return null;
+    try {
+      var b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      var json = atob(b64.padEnd(b64.length + ((4 - (b64.length % 4)) % 4), '='));
+      return JSON.parse(json);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function isJwtValid(token) {
+    var t = normalizeToken(token);
+    if (!/^[\w-]+\.[\w-]+\.[\w-]+$/.test(t)) return false;
+    var data = decodeJwtPayload(t);
+    if (!data) return false;
+    if (data.exp && data.exp * 1000 <= Date.now()) return false;
+    return true;
+  }
+
+  function readToken() {
+    var session = '';
+    var pasted = '';
+    try { session = normalizeToken(localStorage.getItem(SESSION_KEY)); } catch (_) {}
+    try { pasted = normalizeToken(localStorage.getItem(TOKEN_KEY)); } catch (_) {}
+    if (isJwtValid(session)) return session;
+    if (isJwtValid(pasted)) return pasted;
+    return '';
+  }
+
+  function tokenProblem() {
+    var session = '';
+    var pasted = '';
+    try { session = normalizeToken(localStorage.getItem(SESSION_KEY)); } catch (_) {}
+    try { pasted = normalizeToken(localStorage.getItem(TOKEN_KEY)); } catch (_) {}
+    var any = session || pasted;
+    if (!any) return 'TOKEN_MISSING';
+    if (!/^[\w-]+\.[\w-]+\.[\w-]+$/.test(any)) return 'TOKEN_MISSING';
+    var data = decodeJwtPayload(any);
+    if (data && data.exp && data.exp * 1000 <= Date.now()) return 'TOKEN_EXPIRED';
+    if (!isJwtValid(any)) return 'TOKEN_MISSING';
+    return null;
+  }
+
+  function saveToken(token) {
+    var t = normalizeToken(token);
+    if (!isJwtValid(t)) return false;
+    try { localStorage.setItem(SESSION_KEY, t); } catch (_) {}
+    try { localStorage.setItem(TOKEN_KEY, t); } catch (_) {}
+    if (global.ONYXAuth && typeof global.ONYXAuth.login === 'function') {
+      try { global.ONYXAuth.login(t); } catch (_) {}
+    }
+    return true;
+  }
+
+  function openSenpaLogin() {
+    log('Starting authentication');
+    toast('Opening Senpa login…');
+    var popup = window.open(
+      AUTH_ORIGIN + '/auth/discord',
+      'Senpa Discord Login',
+      'toolbar=no,menubar=no,width=600,height=700,top=100,left=100'
+    );
+    if (!popup) {
+      fail('AUTH_REQUIRED', 'Popup blocked. Allow popups, or paste a Senpa session token.');
+      if (global.ONYXAuth && global.ONYXAuth.openSenpaPanel) global.ONYXAuth.openSenpaPanel();
+      return null;
+    }
+    try { popup.focus(); } catch (_) {}
+    return popup;
+  }
+
+  function waitForAuth(timeoutMs) {
+    timeoutMs = timeoutMs || 180000;
+    return new Promise(function (resolve, reject) {
+      var existing = readToken();
+      if (existing) {
+        saveToken(existing);
+        resolve(existing);
+        return;
+      }
+      openSenpaLogin();
+      var timer = setTimeout(function () {
+        cleanup();
+        var problem = tokenProblem() || 'AUTH_REQUIRED';
+        fail(problem, 'Login did not finish.');
+        reject(new Error(problem));
+      }, timeoutMs);
+
+      function onMessage(event) {
+        if (event.origin !== AUTH_ORIGIN) return;
+        var data = event.data || {};
+        if (data.type === 'senpa-auth-ready') {
+          try { event.source && event.source.postMessage({ type: 'senpa-auth-hello' }, AUTH_ORIGIN); } catch (_) {}
+          return;
+        }
+        var token = data.access_token || data.token;
+        if (token && saveToken(token)) {
+          cleanup();
+          resolve(token);
+        }
+      }
+
+      function onUpdated() {
+        var token = readToken();
+        if (token) {
+          cleanup();
+          resolve(token);
+        }
+      }
+
+      function cleanup() {
+        clearTimeout(timer);
+        window.removeEventListener('message', onMessage);
+        window.removeEventListener('senpa-auth-updated', onUpdated);
+        window.removeEventListener('onyx:senpa-auth-changed', onUpdated);
+      }
+
+      window.addEventListener('message', onMessage);
+      window.addEventListener('senpa-auth-updated', onUpdated);
+      window.addEventListener('onyx:senpa-auth-changed', onUpdated);
+    });
+  }
+
+  function readUiProfile() {
+    return {
+      nick1: (document.getElementById('nick') || {}).value || 'player',
+      nick2: (document.getElementById('nick2') || {}).value || '',
+      tag: (document.getElementById('tag') || {}).value || '',
+      skin1: (document.getElementById('skin') || {}).value || '',
+      skin2: (document.getElementById('skin2') || {}).value || ''
+    };
+  }
+
+  function Writer(size) {
+    this.le = true;
+    this.offset = 0;
+    this.buffer = new ArrayBuffer(size || 8192);
+    this.view = new DataView(this.buffer);
+  }
+  Writer.prototype.writeUInt8 = function (v) { this.view.setUint8(this.offset++, v); };
+  Writer.prototype.writeUInt16 = function (v) { this.view.setUint16(this.offset, v, this.le); this.offset += 2; };
+  Writer.prototype.writeInt32 = function (v) { this.view.setInt32(this.offset, v, this.le); this.offset += 4; };
+  Writer.prototype.writeUTF16String = function (t) {
+    t = String(t || '');
+    for (var i = 0; i < t.length; i++) this.writeUInt16(t.charCodeAt(i));
+  };
+  Writer.prototype.writeUTF16StringLength = function (t) {
+    t = String(t || '');
+    if (t.length > 255) t = t.substring(0, 255);
+    this.writeUInt8(t.length);
+    this.writeUTF16String(t);
+  };
+  Writer.prototype.writeLongString8 = function (t) {
+    t = String(t || '');
+    this.writeUInt16(t.length);
+    for (var i = 0; i < t.length; i++) this.writeUInt8(t.charCodeAt(i));
+  };
+  Writer.prototype.finalize = function () {
+    return new Uint8Array(this.buffer.slice(0, this.offset));
+  };
+
+  function Reader(view) {
+    this.view = view;
+    this.offset = 0;
+    this.le = true;
+  }
+  Reader.prototype.readUInt8 = function () { return this.view.getUint8(this.offset++); };
+  Reader.prototype.readInt8 = function () { return this.view.getInt8(this.offset++); };
+  Reader.prototype.readUInt16 = function () { var v = this.view.getUint16(this.offset, this.le); this.offset += 2; return v; };
+  Reader.prototype.readUInt24 = function () { return this.readUInt8() << 16 | this.readUInt8() << 8 | this.readUInt8(); };
+  Reader.prototype.readUInt32 = function () { var v = this.view.getUint32(this.offset, this.le); this.offset += 4; return v; };
+  Reader.prototype.readInt32 = function () { var v = this.view.getInt32(this.offset, this.le); this.offset += 4; return v; };
+  Reader.prototype.readUTF16String = function (len) {
+    var n = '';
+    for (var i = 0; i < len; i++) n += String.fromCharCode(this.readUInt16());
+    return n;
+  };
+  Reader.prototype.readUTF16StringLength = function () {
+    return this.readUTF16String(this.readUInt8());
+  };
+
+  function tid() {
+    var existing = '';
+    try { existing = global.__JAXXV6_SENPA_TID__ || sessionStorage.getItem(TID_KEY) || ''; } catch (_) {}
+    if (/^[a-f0-9]{32}$/.test(existing)) return existing;
+    var hex;
+    if (typeof crypto.randomUUID === 'function') hex = crypto.randomUUID().replace(/-/g, '');
+    else {
+      var bytes = crypto.getRandomValues(new Uint8Array(16));
+      hex = Array.from(bytes).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+    }
+    try { global.__JAXXV6_SENPA_TID__ = hex; sessionStorage.setItem(TID_KEY, hex); } catch (_) {}
+    return hex;
+  }
+
+  function ffaHost() {
+    var opt = selectedOption();
+    var host = (opt && opt.getAttribute('data-onyx-host')) || FFA_HOST;
+    if (!host || host.indexOf('ffa:') !== -1 || host.indexOf('://') !== -1) {
+      throw new Error('[FFA] Invalid server host: ' + host);
+    }
+    return host;
+  }
+
+  function buildFfaUrl() {
+    var host = ffaHost();
+    return 'wss://' + host + '?po=' + encodeURIComponent(location.host) + '&tid=' + tid();
+  }
+
+  function sendPacket(writer) {
+    if (!worker || !socketOpen) return;
+    var bytes = writer instanceof Uint8Array ? writer : writer.finalize();
+    var copy = bytes.slice().buffer;
+    worker.postMessage({ type: 'send', data: copy }, [copy]);
+  }
+
+  function sendAuth() {
+    lastPhase = 'HANDSHAKE';
+    var token = readToken();
+    var payload = isJwtValid(token) ? token : 'null';
+    if (payload === 'null') fail('TOKEN_MISSING', 'sendAuth: senpaio:session is not a JWT');
+    else log('Sending handshake');
+    var w = new Writer(8 + payload.length * 2);
+    w.writeUInt8(13);
+    w.writeUInt16(payload.length);
+    w.writeUTF16String(payload);
+    sendPacket(w);
+  }
+
+  function sendPlayerInfo() {
+    if (!authCompleted) return;
+    var cfg = readUiProfile();
+    var nick = cfg.nick1 || 'player';
+    var tag = cfg.tag || '';
+    var n = new Writer(4 + nick.length * 2);
+    n.writeUInt8(10);
+    n.writeUTF16StringLength(nick);
+    sendPacket(n);
+    var t = new Writer(4 + tag.length * 2);
+    t.writeUInt8(11);
+    t.writeUTF16StringLength(tag);
+    sendPacket(t);
+  }
+
+  function sendPing() {
+    if (!authCompleted) return;
+    var w = new Writer(4);
+    w.writeUInt8(30);
+    sendPacket(w);
+  }
+
+  function sendSpawn() {
+    if (!authCompleted) return;
+    sendPlayerInfo();
+    var w = new Writer(4);
+    w.writeUInt8(0);
+    w.writeUInt8(activeTab);
+    log('Sending spawn for tab ' + activeTab);
+    lastPhase = 'SPAWN';
+    sendPacket(w);
+  }
+
+  function sendCursor() {
+    if (!authCompleted) return;
+    var w = new Writer(16);
+    w.writeUInt8(20);
+    w.writeUInt8(0);
+    w.writeUInt8(activeTab);
+    w.writeInt32(mouseX | 0);
+    w.writeInt32(mouseY | 0);
+    sendPacket(w);
+  }
+
+  function sendSplit() {
+    if (!authCompleted) return;
+    var w = new Writer(8);
+    w.writeUInt8(22);
+    w.writeUInt8(activeTab);
+    w.writeUInt8(1);
+    sendPacket(w);
+  }
+
+  function sendFeed() {
+    if (!authCompleted) return;
+    var w = new Writer(8);
+    w.writeUInt8(23);
+    w.writeUInt8(activeTab);
+    w.writeUInt8(0);
+    sendPacket(w);
+  }
+
+  function sendCaptcha(type, token) {
+    var w = new Writer(8 + String(token || '').length);
+    w.writeUInt8(14);
+    w.writeUInt8(type);
+    w.writeLongString8(token);
+    sendPacket(w);
+  }
+
+  function markConnected() {
+    if (spawned) return;
+    spawned = true;
+    lastPhase = 'CONNECTED';
+    global.__ONYX_FFA_CONNECTED__ = true;
+    log('Spawn successful');
+    log('FFA CONNECTED');
+    toast('FFA CONNECTED');
+  }
+
+  function handleOpcode20(r) {
+    var eatCount = r.readUInt16();
+    var i;
+    for (i = 0; i < eatCount; i++) {
+      r.readUInt32();
+      var eatenId = r.readUInt32();
+      delete cells[eatenId];
+    }
+    var addCount = r.readUInt16();
+    for (i = 0; i < addCount; i++) {
+      var id = r.readUInt32();
+      var x = r.readInt32();
+      var y = r.readInt32();
+      var size = r.readUInt16();
+      var kind = r.readUInt8();
+      var mine = false;
+      var color = 0xffffff;
+      if (kind === 0) {
+        var pid = r.readUInt16();
+        color = r.readUInt24();
+        mine = playerIds.indexOf(pid) !== -1;
+      } else if (kind === 2) {
+        color = r.readUInt24();
+      } else if (kind === 5) {
+        var blobLen = r.readUInt16();
+        r.offset += blobLen;
+      }
+      cells[id] = { id: id, x: x, y: y, r: size, mine: mine, color: color, kind: kind };
+      if (mine) {
+        var exists = false;
+        for (var c = 0; c < ownCells.length; c++) if (ownCells[c] === id) exists = true;
+        if (!exists) ownCells.push(id);
+        markConnected();
+      }
+    }
+    var updCount = r.readUInt16();
+    for (i = 0; i < updCount; i++) {
+      var uid = r.readUInt32();
+      var ux = r.readInt32();
+      var uy = r.readInt32();
+      var ur = r.readUInt16();
+      if (cells[uid]) {
+        cells[uid].x = ux;
+        cells[uid].y = uy;
+        cells[uid].r = ur;
+      }
+    }
+    var delCount = r.readUInt16();
+    for (i = 0; i < delCount; i++) {
+      var did = r.readUInt32();
+      if (did === 0) break;
+      delete cells[did];
+      var idx = ownCells.indexOf(did);
+      if (idx !== -1) ownCells.splice(idx, 1);
+    }
+  }
+
+  function onServerPacket(buf) {
+    var r = new Reader(new DataView(buf));
+    if (r.view.byteLength < 1) return;
+    var op = r.readUInt8();
+    switch (op) {
+      case 0: {
+        border = r.readUInt32();
+        clientId = r.readUInt16();
+        var nTabs = r.readUInt8();
+        playerIds = [];
+        for (var t = 0; t < nTabs; t++) playerIds.push(r.readUInt16());
+        if (playerIds.length > 1) {
+          fail('SERVER_REJECTED', 'Multiple tabs / dual mode is not handled by this FFA module');
+          stop('dual');
+          return;
+        }
+        activeTab = 0;
+        authCompleted = true;
+        clientReady = true;
+        lastPhase = 'INIT';
+        log('Handshake accepted');
+        log('Authentication accepted');
+        log('Initialization complete');
+        sendPlayerInfo();
+        if (pingTimer) clearInterval(pingTimer);
+        pingTimer = setInterval(sendPing, 1000);
+        spawnTimer = setTimeout(function () {
+          if (playing && authCompleted && ownCells.length === 0) sendSpawn();
+        }, 200);
+        break;
+      }
+      case 7: {
+        r.readUInt8();
+        var capType = r.readUInt8();
+        log('Captcha requested type=' + capType);
+        if (capType === 1) startTurnstile();
+        else fail('SERVER_REJECTED', 'Unknown captcha type ' + capType);
+        break;
+      }
+      case 8:
+        sendAuth();
+        break;
+      case 10:
+      case 11:
+        if (lastPhase === 'INIT' || lastPhase === 'HANDSHAKE') log('Player initialized');
+        break;
+      case 20:
+        if (!worldSeen) {
+          worldSeen = true;
+          log('World state received');
+        }
+        try { handleOpcode20(r); } catch (err) {
+          console.warn('[FFA] opcode 20 parse', err);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  function ensureTurnstile() {
+    if (global.turnstile && typeof global.turnstile.render === 'function') {
+      return Promise.resolve(global.turnstile);
+    }
+    return new Promise(function (resolve, reject) {
+      var existing = document.querySelector('script[src*="challenges.cloudflare.com/turnstile/v0/api.js"]');
+      if (!existing) {
+        var script = document.createElement('script');
+        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+        script.async = true;
+        script.defer = true;
+        script.onerror = function () { reject(new Error('Turnstile script failed to load')); };
+        (document.head || document.documentElement).appendChild(script);
+      }
+      var started = Date.now();
+      (function poll() {
+        if (global.turnstile && typeof global.turnstile.render === 'function') return resolve(global.turnstile);
+        if (Date.now() - started > 15000) return reject(new Error('Turnstile did not load'));
+        setTimeout(poll, 100);
+      })();
+    });
+  }
+
+  function startTurnstile() {
+    if (turnstilePending) return;
+    turnstilePending = true;
+    ensureTurnstile().then(function (turnstile) {
+      var overlay = document.getElementById('onyx-ffa-captcha');
+      if (overlay) overlay.remove();
+      overlay = document.createElement('div');
+      overlay.id = 'onyx-ffa-captcha';
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;background:rgba(0,0,0,.72);color:#eef4ff;font:16px system-ui,sans-serif';
+      overlay.innerHTML = '<div style="width:min(92vw,430px);padding:24px;border:1px solid #3e516b;border-radius:14px;background:#111923;text-align:center"><h2 style="margin:0 0 10px">Security verification</h2><p>Complete Cloudflare verification to connect to Senpa FFA.</p><div id="onyx-ffa-turnstile"></div></div>';
+      document.body.appendChild(overlay);
+      turnstile.render('#onyx-ffa-turnstile', {
+        sitekey: CAPTCHA_SITE_KEY,
+        theme: 'dark',
+        callback: function (token) {
+          turnstilePending = false;
+          sendCaptcha(1, token);
+          if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        },
+        'error-callback': function () {
+          turnstilePending = false;
+          fail('SERVER_REJECTED', 'Cloudflare verification failed');
+          return true;
+        }
+      });
+    }).catch(function (err) {
+      turnstilePending = false;
+      fail('INITIALIZATION_FAILED', err && err.message ? err.message : String(err));
+    });
+  }
+
+  function showFfaCanvas(show) {
+    var game = document.getElementById('gameCanvas');
+    var legacy = document.getElementById('canvas');
+    var menu = document.getElementById('menu-overlay');
+    if (game) game.style.display = show ? 'block' : 'none';
+    if (legacy) legacy.style.visibility = show ? 'hidden' : '';
+    if (menu) menu.style.display = show ? 'none' : '';
+    global.__ONYX_FFA_PLAYING__ = !!show;
+  }
+
+  function draw() {
+    rafId = 0;
+    if (!playing) return;
+    var canvas = document.getElementById('gameCanvas');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    if (canvas.width !== innerWidth || canvas.height !== innerHeight) {
+      canvas.width = innerWidth;
+      canvas.height = innerHeight;
+    }
+    ctx.fillStyle = '#07090d';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    var cx = 0;
+    var cy = 0;
+    var n = 0;
+    for (var i = 0; i < ownCells.length; i++) {
+      var oc = cells[ownCells[i]];
+      if (!oc) continue;
+      cx += oc.x;
+      cy += oc.y;
+      n++;
+    }
+    if (n) { cx /= n; cy /= n; }
+    else if (border) { cx = border / 2; cy = border / 2; }
+    var scale = 0.18;
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.scale(scale, scale);
+    ctx.translate(-cx, -cy);
+    var ids = Object.keys(cells);
+    for (var k = 0; k < ids.length; k++) {
+      var cell = cells[ids[k]];
+      if (!cell) continue;
+      ctx.beginPath();
+      ctx.arc(cell.x, cell.y, Math.max(8, cell.r), 0, Math.PI * 2);
+      ctx.fillStyle = cell.mine ? '#7CFFB2' : ('#' + ('000000' + (cell.color >>> 0).toString(16)).slice(-6));
+      ctx.globalAlpha = cell.kind === 3 ? 0.55 : 0.9;
+      ctx.fill();
+    }
+    ctx.restore();
+    rafId = requestAnimationFrame(draw);
+  }
+
+  function canvasToWorld(ev) {
+    var canvas = document.getElementById('gameCanvas');
+    if (!canvas) return;
+    var cx = 0;
+    var cy = 0;
+    var n = 0;
+    for (var i = 0; i < ownCells.length; i++) {
+      var oc = cells[ownCells[i]];
+      if (!oc) continue;
+      cx += oc.x;
+      cy += oc.y;
+      n++;
+    }
+    if (n) { cx /= n; cy /= n; }
+    else if (border) { cx = border / 2; cy = border / 2; }
+    var scale = 0.18;
+    mouseX = (ev.clientX - canvas.width / 2) / scale + cx;
+    mouseY = (ev.clientY - canvas.height / 2) / scale + cy;
+  }
+
+  function killWorker() {
+    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+    if (spawnTimer) { clearTimeout(spawnTimer); spawnTimer = null; }
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    socketOpen = false;
+    workerReady = false;
+    if (worker) {
+      try { worker.postMessage({ type: 'close' }); } catch (_) {}
+      try { worker.terminate(); } catch (_) {}
+      worker = null;
+    }
+  }
+
+  function resetSession() {
+    authCompleted = false;
+    clientReady = false;
+    worldSeen = false;
+    spawned = false;
+    clientId = 0;
+    playerIds = [];
+    ownCells = [];
+    cells = Object.create(null);
+    players = Object.create(null);
+    border = 0;
+    turnstilePending = false;
+    global.__ONYX_FFA_CONNECTED__ = false;
+    var cap = document.getElementById('onyx-ffa-captcha');
+    if (cap && cap.parentNode) cap.parentNode.removeChild(cap);
+  }
+
+  function startWorker() {
+    killWorker();
+    resetSession();
+    snapshotGlobals('before-worker');
+    worker = new Worker(WORKER_URL);
+    worker.onmessage = function (ev) {
+      var msg = ev.data || {};
+      if (msg.type === 'log') {
+        log(String(msg.msg || '').replace(/^\[WASM\]\s*/, ''));
+        return;
+      }
+      if (msg.type === 'codec-ready') {
+        workerReady = true;
+        log('Codec worker ready (isolated WASM)');
+        lastPhase = 'CONNECTING';
+        log('Connecting to ' + FFA_HOST);
+        worker.postMessage({ type: 'connect', url: buildFfaUrl() });
+        return;
+      }
+      if (msg.type === 'open') {
+        socketOpen = true;
+        lastPhase = 'WS_OPEN';
+        log('WebSocket OPEN');
+        return;
+      }
+      if (msg.type === 'message') {
+        onServerPacket(msg.data);
+        return;
+      }
+      if (msg.type === 'close') {
+        var code = msg.code;
+        if (global.__ONYX_FFA_CONNECTED__ && (code === 1000 || code === 1001)) {
+          log('WebSocket closed after gameplay code=' + code);
+          return;
+        }
+        var errCode = 'WS_ERROR';
+        if (code === 1008 || code === 4001 || code === 4003) errCode = 'SERVER_REJECTED';
+        if (!global.__ONYX_FFA_CONNECTED__ && (code === 1000 || code === 1005)) errCode = 'HANDSHAKE_FAILED';
+        fail(errCode, 'close code=' + code + ' reason="' + (msg.reason || '') + '" clean=' + msg.wasClean, {
+          phase: lastPhase,
+          authCompleted: authCompleted,
+          clientReady: clientReady
+        });
+        stop('close');
+        return;
+      }
+      if (msg.type === 'error') {
+        fail(msg.code || 'WS_ERROR', msg.msg || '');
+      }
+    };
+    worker.onerror = function (err) {
+      fail('INITIALIZATION_FAILED', err && err.message ? err.message : 'codec worker error');
+    };
+  }
+
+  function onMouseMove(ev) {
+    if (!playing) return;
+    canvasToWorld(ev);
+    sendCursor();
+  }
+
+  function onKeyDown(ev) {
+    if (!playing) return;
+    var t = ev.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (ev.code === 'Space') {
+      ev.preventDefault();
+      sendSplit();
+    } else if (ev.key === 'w' || ev.key === 'W') {
+      sendFeed();
+    }
+  }
+
+  async function play(profileOverride) {
+    if (!isFfaSelected() && !(profileOverride && isFfaValue(profileOverride.server))) {
+      return false;
+    }
+
+    snapshotGlobals('play');
+    log('Starting authentication');
+    var problem = tokenProblem();
+    var token = readToken();
+    if (!token) {
+      if (problem === 'TOKEN_EXPIRED') fail('TOKEN_EXPIRED', 'Senpa session expired. Login again.');
+      else fail('TOKEN_MISSING', 'No Senpa session. Opening official login.');
+      try {
+        token = await waitForAuth();
+      } catch (_) {
+        return false;
+      }
+    } else {
+      saveToken(token);
+    }
+    log('Authenticated');
+
+    showFfaCanvas(true);
+    playing = true;
+    startWorker();
+    if (!rafId) rafId = requestAnimationFrame(draw);
+    return true;
+  }
+
+  function stop(reason) {
+    playing = false;
+    lastPhase = 'IDLE';
+    global.__ONYX_FFA_PLAYING__ = false;
+    killWorker();
+    resetSession();
+    showFfaCanvas(false);
+    if (reason === 'user') toast('FFA disconnected');
+  }
+
+  function playFromUi() {
+    play(readUiProfile()).catch(function (err) {
+      fail('INITIALIZATION_FAILED', err && err.message ? err.message : String(err));
+    });
+  }
+
+  function interceptUi() {
+    document.addEventListener('click', function (e) {
+      var playBtn = e.target && e.target.closest && e.target.closest('#button-play');
+      if (!playBtn || !isFfaSelected()) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      playFromUi();
+    }, true);
+
+    document.addEventListener('click', function (e) {
+      var spec = e.target && e.target.closest && e.target.closest('#button-spectate');
+      if (!spec || !isFfaSelected()) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      playFromUi();
+    }, true);
+
+    window.addEventListener('mousemove', onMouseMove, true);
+    window.addEventListener('keydown', onKeyDown, true);
+  }
+
+  window.addEventListener('message', function (event) {
+    if (event.origin !== AUTH_ORIGIN) return;
+    var data = event.data || {};
+    var token = data.access_token || data.token;
+    if (token) saveToken(token);
+  });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', interceptUi);
+  } else {
+    interceptUi();
+  }
+
+  snapshotGlobals('boot');
+
+  global.ONYXFfa = {
+    VALUE: FFA_VALUE,
+    WS_URL: FFA_WS,
+    isFfaValue: isFfaValue,
+    isFfaSelected: isFfaSelected,
+    play: play,
+    stop: stop,
+    playFromUi: playFromUi,
+    getPhase: function () { return lastPhase; },
+    isPlaying: function () { return playing; }
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
