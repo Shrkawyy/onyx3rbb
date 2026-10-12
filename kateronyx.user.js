@@ -1,14 +1,15 @@
 // ==UserScript==
 // @name         KaterOnyx FFA for 3rb.io
 // @namespace    https://kateronyx.local/ffa
-// @version      2.3.0
-// @description  Loads the ONYX interface and bot panel on 3rb.io (experimental V5 adapter).
+// @version      2.3.1
+// @description  ONYX routing repair and diagnostics. Full 3rb V5 gameplay compatibility is NOT complete.
 // @author       ZkaOnyx
 // @match        https://3rb.io/*
 // @match        https://www.3rb.io/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
 // @grant        GM_info
+// @grant        GM_registerMenuCommand
 // @connect      127.0.0.1
 // @connect      localhost
 // @connect      192.168.1.6
@@ -25,9 +26,9 @@
 (function () {
   'use strict';
 
-  var DEFAULT_BASE_URL = 'https://senpabots.vercel.app/';
+  var DEFAULT_BASE_URL = 'https://4173-i0t6zpzm90eo5opcdb053-77c0548d.sg2.manus.computer/';
   var CLIENT_FILE = 'index.html';
-  var VERSION = '2.3.0';
+  var VERSION = '2.3.1';
   var MOUNT_KEY = 'kateronyx:mounting';
   var LOCAL_CSS = [
     'assets/css/albion.css',
@@ -404,11 +405,20 @@
       '})();' +
       'console.log("[ONYX] BOOT");' +
       'console.log("[ONYX-ENGINE] wasm blobs ready (game+89, not wasmLoader.js)");' +
-      'console.log("[ONYX 3RB] GAME_RUNTIME_REPLACED = true");' +
+      'console.log("[ONYX 3RB] LEGACY_SENPA_RUNTIME_LOADED; 3rb V5 compatibility is unverified");' +
       'console.log("[ONYX] THEME_INLINED = true");'
     );
   }
 
+
+  function toDataUrl(value, mime) {
+    if (!value) return '';
+    var bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer || value);
+    var binary = '';
+    var step = 0x8000;
+    for (var i = 0; i < bytes.length; i += step) binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + step, bytes.length)));
+    return 'data:' + mime + ';base64,' + btoa(binary);
+  }
 
   // Embedded bot assets: generated from the same files as the hosted client.
   async function mountBotPanel() {
@@ -447,8 +457,8 @@
     var soundsJs = await gmGet(baseUrl + 'assets/js/ryuten-sounds.js?v=' + v);
     var deoJs = await gmGet(baseUrl + 'deo.onyx.beautified.js?v=' + v);
     var extrasJs = await gmGet(baseUrl + 'assets/js/ryuten-extras.js?v=' + v);
-    var serversJs = await gmGet(baseUrl + 'onyx-3rb-servers.js?v=' + v);
-    var adapterJs = await gmGet(baseUrl + 'onyx-3rb-adapter.js?v=' + v);
+    var serversJs = "/* ONYX 3rb-only server catalogue. Uses the public 3rb discovery endpoint. */\n(function (global) {\n  'use strict';\n  var endpoint = 'https://3rb.io/php/Servers.php';\n  var entries = [];\n  var pending = null;\n  function slug(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }\n  function normalize(data) {\n    if (!data || typeof data.ip !== 'string' || !data.modes) throw new Error('Invalid 3rb server discovery response');\n    var out = [];\n    Object.keys(data.modes).forEach(function (mode) {\n      var group = data.modes[mode] || {};\n      (Array.isArray(group.servers) ? group.servers : []).forEach(function (row) {\n        var port = Number(row && row.port);\n        if (!Number.isInteger(port) || port < 1 || port > 65535) return;\n        out.push({\n          id: '3rb-' + slug(mode) + '-' + port,\n          name: String(row.name || (mode + ' ' + port)), mode: mode,\n          mode_name: mode, host: data.ip.trim(), port: port,\n          url: 'wss://' + data.ip.trim() + ':' + port + '/V5',\n          players: Number.isInteger(row.count) ? row.count : null,\n          capacity: Number.isInteger(group.max) ? group.max : null,\n          region: String(data.region || 'NA'), protocol: '3rb-v5'\n        });\n      });\n    });\n    return out;\n  }\n  function find(value) { value = String(value || '').trim(); return entries.find(function (e) { return value === e.id || value === e.host + ':' + e.port || value === e.url || value === String(e.port); }) || null; }\n  function mapHost(value) { var e = find(value); return e ? e.host + ':' + e.port : String(value || '').trim(); }\n  function render(select, selected) {\n    if (!select) return;\n    var old = find(selected || select.value), fragment = document.createDocumentFragment();\n    entries.forEach(function (e) { var option = document.createElement('option'); option.value = e.id; option.textContent = e.name + ' \u2014 ' + e.mode + (e.players !== null && e.capacity !== null ? ' (' + e.players + '/' + e.capacity + ')' : ''); option.dataset.onyxId = e.id; option.dataset.onyxHost = e.host + ':' + e.port; option.dataset.onyxType = e.mode; option.dataset.onyxProtocol = '3rb-v5'; option.selected = old ? e.id === old.id : e === entries[0]; fragment.appendChild(option); });\n    select.replaceChildren(fragment);\n  }\n  async function refresh() {\n    if (pending) return pending;\n    pending = fetch(endpoint, { credentials: 'omit', cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error('3rb discovery HTTP ' + r.status); return r.json(); }).then(function (data) { entries = normalize(data); render(document.getElementById('servers')); return list(); });\n    try { return await pending; } finally { pending = null; }\n  }\n  function list() { return entries.map(function (e) { return Object.assign({}, e); }); }\n  global.ONYXServers = { list: list, find: find, mapHost: mapHost, refresh: refresh, applyTracker: function (data) { entries = normalize(data); return list(); }, provider: '3rb' };\n  if (global.document) { function boot() { refresh().catch(function (e) { console.warn('[ONYX 3RB] server discovery unavailable', e); }); } if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true }); else boot(); }\n})(typeof window !== 'undefined' ? window : globalThis);\n";
+    var adapterJs = "/* Transport routing repair only. The legacy Senpa codec is NOT a 3rb V5 codec. */\n(function (global) {\n  'use strict';\n  var hooked = false;\n  var diagnostics = { version: '2.3.1-routing', protocolReady: false, attempts: 0, lastTarget: '', errors: [] };\n  function selected() {\n    var el = global.document && global.document.getElementById('servers');\n    return el && el.value || '';\n  }\n  function wsUrl(value) {\n    var raw = String(value || selected() || '').trim();\n    var entry = global.ONYXServers && global.ONYXServers.find(raw);\n    if (entry) raw = entry.url;\n    if (!raw) throw new Error('Select a 3rb server first.');\n    var url = new URL(/^wss:\\/\\//i.test(raw) ? raw : 'wss://' + raw);\n    if (url.protocol !== 'wss:' || !/(^|\\.)3rb\\.io$/i.test(url.hostname) || url.username || url.password || url.hash || url.search || !['/', '/V5', '/V5/'].includes(url.pathname)) {\n      throw new Error('Invalid 3rb server address.');\n    }\n    url.pathname = '/V5';\n    return url.href;\n  }\n  function readSession() { try { return global.localStorage.getItem('3rbio:session') || global.localStorage.getItem('session') || ''; } catch (_) { return ''; } }\n  function unsupported(name) { throw new Error('[ONYX 3RB] ' + name + ' requires the official 3rb V5 codec/handshake.'); }\n  var adapter = { provider: '3rb', wsUrl: wsUrl, readSession: readSession, readJwt: readSession,\n    is3rb: function () { return true; }, isNewFfa: function () { return false; }, unsupported: unsupported, diagnostics: diagnostics };\n  // This is the exact facade read at BOTH create() call sites in deo.onyx.\n  global.__ONYX_ADAPTER__ = global.ONYX3rbAdapter = global.ONYXFfaAdapter = adapter;\n  function record(error) {\n    var message = String(error && error.message || error || 'Unknown runtime error');\n    diagnostics.errors.push(message.slice(0, 300));\n    if (diagnostics.errors.length > 10) diagnostics.errors.shift();\n    console.error('[ONYX 3RB] Runtime failure; V5 compatibility is not established:', message);\n  }\n  function hook() {\n    if (hooked || !global.SC || typeof global.SC.init !== 'function') return;\n    hooked = true;\n    var init = global.SC.init;\n    global.SC.init = function (host, tab) {\n      var target = wsUrl(host || this.ip);\n      diagnostics.lastTarget = target;\n      diagnostics.attempts++;\n      console.log('[ONYX 3RB] ROUTING target=' + target + ' tab=' + (tab || 1));\n      try { return init.call(this, target, tab); }\n      catch (error) { record(error); throw error; }\n    };\n    console.warn('[ONYX 3RB] URL routing repaired. Legacy codec remains unverified for 3rb V5.');\n  }\n  hook();\n  var timer = hooked ? null : setInterval(function () { hook(); if (hooked) clearInterval(timer); }, 50);\n  if (global.addEventListener) {\n    global.addEventListener('pagehide', function () { if (timer !== null) clearInterval(timer); }, { once: true });\n    global.addEventListener('error', function (event) {\n      if (/DataView|Uint32Array|WebAssembly|wasm|out of bounds/i.test(String(event.message || ''))) record(event.error || event.message);\n    });\n  }\n})(typeof window !== 'undefined' ? window : globalThis);\n";
     var uiJs = await gmGet(baseUrl + 'onyx-ui.js?v=' + v);
 
     var cdnTexts = await Promise.all(CDN_SCRIPTS.map(function (item) {
@@ -460,7 +470,7 @@
     }));
 
     var cssPairs = await Promise.all(cssGets);
-    var fontBlob = fontBuf ? URL.createObjectURL(new Blob([fontBuf], { type: 'font/woff' })) : '';
+    var fontBlob = fontBuf ? toDataUrl(fontBuf, 'font/woff') : '';
     var cssMap = {};
     for (var i = 0; i < cssPairs.length; i++) {
       cssMap[cssPairs[i][0]] = rewriteCssUrls(cssPairs[i][1], baseUrl, fontBlob);
@@ -481,8 +491,8 @@
     document.documentElement.querySelectorAll('iframe,embed,object').forEach(function (node) { node.remove(); });
     console.log('[ONYX 3RB] ADS_BLOCKED = true');
 
-    var wasmBlob = URL.createObjectURL(new Blob([wasm], { type: 'application/wasm' }));
-    var wasm89Blob = URL.createObjectURL(new Blob([wasm89], { type: 'application/wasm' }));
+    var wasmBlob = toDataUrl(wasm, 'application/wasm');
+    var wasm89Blob = toDataUrl(wasm89, 'application/wasm');
     await injectScript(
       'window.__JAXXV6_USERSCRIPT__=false;window.__ONYX_LOADER_GENERATION__=2;' +
       wasmHookSource(wasmBlob, wasm89Blob, fontBlob, baseUrl),
@@ -518,6 +528,27 @@
     );
     try { sessionStorage.removeItem(MOUNT_KEY); } catch (_) {}
   }
+
+
+  // Recovery is checked before stopping or replacing the official page.
+  if (typeof GM_registerMenuCommand === 'function') {
+    GM_registerMenuCommand('ONYX: switch to official 3rb / return to ONYX', function () {
+      var nativeMode = localStorage.getItem('kateronyx:official-mode') === '1';
+      localStorage.setItem('kateronyx:official-mode', nativeMode ? '0' : '1');
+      location.reload();
+    });
+    GM_registerMenuCommand('ONYX: set project URL', function () {
+      var value = prompt('HTTPS project URL (contains index.html and 899.wasm):', getBaseUrl());
+      if (value === null) return;
+      try {
+        var url = new URL(value.trim());
+        if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && isLocalHost(url.hostname))) || url.username || url.password || url.search || url.hash) throw new Error('Invalid URL');
+        localStorage.setItem('kateronyx:base-url', url.href.endsWith('/') ? url.href : url.href + '/');
+        location.reload();
+      } catch (_) { alert('Enter an HTTPS URL, or an HTTP localhost URL.'); }
+    });
+  }
+  if (localStorage.getItem('kateronyx:official-mode') === '1') return;
 
   killSenpaRuntime();
   seizePage();

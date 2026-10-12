@@ -26,7 +26,7 @@
     });
     return out;
   }
-  function find(value) { value = String(value || '').trim(); return entries.find(function (e) { return value === e.id || value === e.host || value === e.url || value === String(e.port); }) || null; }
+  function find(value) { value = String(value || '').trim(); return entries.find(function (e) { return value === e.id || value === e.host + ':' + e.port || value === e.url || value === String(e.port); }) || null; }
   function mapHost(value) { var e = find(value); return e ? e.host + ':' + e.port : String(value || '').trim(); }
   function render(select, selected) {
     if (!select) return;
