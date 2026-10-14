@@ -1,0 +1,1637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!-- Turnstile is loaded lazily by auth-bridge.js only when it is not already present. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Titillium+Web:ital,wght@0,200;0,300;0,400;0,600;0,700;0,900;1,200;1,300;1,400;1,600;1,700&display=swap" rel="stylesheet">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="referrer" content="no-referrer">
+<title>OGV.1</title>
+<meta name="description" content="Jax-V5 — Fast 2D browser game">
+<link rel="icon" href="./assets/images/favicon.png" type="image/png">
+<link rel="stylesheet" href="assets/css/styles.css">
+<link rel="stylesheet" href="assets/css/skins.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@300;400;600;700&display=swap">
+
+<script>
+/* ── Imgur CORS Proxy ── */
+(function(){
+  var PROXY_PREFIX='https://overgrounds.vercel.app/api/proxy?url=';
+  var PROXY_MARKER='/api/proxy?url=';
+  var NO_SKIN_URL='https://i.imgur.com/Fm4r5iM.jpeg';
+  var EMPTY_SKIN_DATA='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+  function safeDecode(value){
+    try{return decodeURIComponent(value);}catch(e){return value;}
+  }
+  function normalizeSkinUrl(url){
+    if(!url||typeof url!=='string') return '';
+    var u=url.trim();
+    if(!u||u==='no-skin'||u==='/no-skin') return '';
+    u=u.replace(/^url\(["']?/i,'').replace(/["']?\)$/,'').trim();
+    for(var i=0;i<8;i++){
+      var idx=u.indexOf(PROXY_MARKER);
+      if(idx<0)break;
+      u=safeDecode(u.slice(idx+PROXY_MARKER.length)).trim();
+    }
+    u=u.replace(/^https?:\/\/(?:www\.)?imgur\.com\/([A-Za-z0-9]+)\.(png|jpe?g|gif|webp)(?:[?#].*)?$/i,'https://i.imgur.com/$1.$2');
+    return u;
+  }
+  function proxyUrl(url){
+    url=normalizeSkinUrl(url);
+    if(!url) return '';
+    if(url.startsWith('data:') || url.startsWith('blob:')) return url;
+    if(url.includes('overgrounds.vercel.app/api/proxy')) return url;
+    
+    // Imgur linklerini ve diğer harici linkleri proxy'le (CORS sorununu çözmek için)
+    if(url.includes('imgur.com') || url.startsWith('http')) {
+      return PROXY_PREFIX + encodeURIComponent(url);
+    }
+    return url;
+  }
+  function rawSkinUrl(url){
+    return normalizeSkinUrl(url);
+  }
+  window.proxyUrl=proxyUrl;
+  window.rawSkinUrl=rawSkinUrl;
+  window.normalizeSkinUrl=normalizeSkinUrl;
+  window.NO_SKIN_URL=NO_SKIN_URL;
+  window.EMPTY_SKIN_DATA=EMPTY_SKIN_DATA;
+  try{
+    var origSetAttr=Element.prototype.setAttribute;
+    Element.prototype.setAttribute=function(name,value){
+      if(name==='src'&&this.tagName==='IMG'&&value&&typeof value==='string'){
+        if(value==='no-skin'||value==='/no-skin') value=EMPTY_SKIN_DATA;
+        else if(value.includes('imgur.com')) value=proxyUrl(value);
+      }
+      else if(name==='style'&&value&&typeof value==='string'&&value.includes('imgur.com'))
+        value=value.replace(/url\(['"]?(https?:\/\/i\.imgur\.com[^'")\s]+)['"]?\)/gi,function(_,u){return"url('"+proxyUrl(u)+"')";});
+      return origSetAttr.call(this,name,value);
+    };
+  }catch(e){}
+  try{
+    var imgProto=HTMLImageElement.prototype;
+    var srcDesc=Object.getOwnPropertyDescriptor(imgProto,'src');
+    if(srcDesc&&srcDesc.set){
+      var origSet=srcDesc.set;
+      Object.defineProperty(imgProto,'src',{
+        set:function(url){
+          if(url&&typeof url==='string'){
+            if(url==='no-skin'||url==='/no-skin') url=EMPTY_SKIN_DATA;
+            else if(url.includes('imgur.com')) url=proxyUrl(url);
+          }
+          origSet.call(this,url);
+        },
+        get:srcDesc.get
+      });
+    }
+  }catch(e){}
+  try{
+    var stProto=CSSStyleDeclaration.prototype;
+    var bgDesc=Object.getOwnPropertyDescriptor(stProto,'backgroundImage');
+    if(bgDesc&&bgDesc.set){
+      var origBg=bgDesc.set;
+      Object.defineProperty(stProto,'backgroundImage',{
+        set:function(v){
+          if(v&&typeof v==='string'&&v.includes('imgur.com'))
+            v=v.replace(/url\(['"]?(https?:\/\/i\.imgur\.com[^'")\s]+)['"]?\)/gi,function(_,u){return"url('"+proxyUrl(u)+"')";});
+          origBg.call(this,v);
+        },get:bgDesc.get
+      });
+    }
+  }catch(e){}
+})();
+</script>
+
+<script>
+/* ── Skin Preview from localStorage ── */
+(function(){
+  var DEFAULT_URL=window.NO_SKIN_URL || 'https://i.imgur.com/Fm4r5iM.jpeg';
+  var DEFAULT_SKIN="url('"+window.proxyUrl(DEFAULT_URL)+"')";
+  var validCache={},pendingSet={};
+  function getEl(sel){return document.querySelector(sel);}
+  function getSkinUrlsFromStorage(){
+    try{
+      var n=parseInt(localStorage.getItem('eon_currentProfile')||'1',10);
+      var p=JSON.parse(localStorage.getItem('eon_profile_'+n)||'{}');
+      return{s1:p.primarySkin||'',s2:p.secondarySkin||''};
+    }catch(e){return{s1:'',s2:''};}
+  }
+  function applyPreview(el,url){
+    url = window.rawSkinUrl ? window.rawSkinUrl(url) : url;
+    if(!url||!url.trim()){el.style.backgroundImage=DEFAULT_SKIN;return;}
+    el.style.backgroundImage="url('"+(window.proxyUrl ? window.proxyUrl(url) : url)+"')";
+  }
+  function syncAll(){
+    var el1=getEl('.skin-left'),el2=getEl('.skin-right');
+    if(!el1&&!el2)return;
+    var i1=getEl('.input-skin1'),i2=getEl('.input-skin2');
+    var stored=getSkinUrlsFromStorage();
+    
+    var val1 = ""; try { val1 = (i1 && i1.value) || ""; } catch(e) {}
+    var val2 = ""; try { val2 = (i2 && i2.value) || ""; } catch(e) {}
+    
+    var url1 = val1.trim() ? val1.trim() : stored.s1;
+    var url2 = val2.trim() ? val2.trim() : stored.s2;
+    
+    if(el1) applyPreview(el1, url1);
+    if(el2) applyPreview(el2, url2);
+  }
+  window.__jaxSyncSkinPreviews=syncAll;
+  window.addEventListener('DOMContentLoaded',function(){
+    var i1=getEl('.input-skin1'),i2=getEl('.input-skin2');
+    if(i1)i1.addEventListener('input',syncAll);
+    if(i2)i2.addEventListener('input',syncAll);
+    syncAll();
+    setTimeout(function(){syncAll();},1000);
+    setInterval(syncAll,600);
+  });
+})();
+</script>
+
+<!-- ══ KEY SYSTEM CSS ══ -->
+<style>
+#jax-key-screen {
+  position: fixed; inset: 0; z-index: 999998;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(160deg, #071e22 0%, #0a3340 30%, #0d4a54 55%, #0a3035 80%, #071820 100%);
+  font-family: 'Titillium Web', sans-serif;
+  transition: opacity .5s;
+}
+#jax-key-screen.hidden { opacity: 0; pointer-events: none; }
+#jax-key-screen::before {
+  content: ''; position: absolute; inset: 0;
+  background-image:
+    radial-gradient(circle at 20% 50%, rgba(45,212,191,0.06) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(45,212,191,0.08) 0%, transparent 40%);
+  pointer-events: none;
+}
+.jkx-box {
+  position: relative; background: rgba(10,40,50,0.9);
+  border: 1px solid rgba(45,212,191,0.25); border-radius: 14px;
+  padding: 44px 48px 40px; width: 420px; max-width: 92vw;
+  text-align: center; box-shadow: 0 0 60px rgba(45,212,191,0.08);
+}
+.jkx-logo { display:flex; align-items:center; justify-content:center; gap:10px; margin-bottom:6px; }
+.jkx-logo i { font-size:22px; color:#2dd4bf; }
+.jkx-logo span { font-size:22px; font-weight:900; letter-spacing:5px; color:#fff; }
+.jkx-sub { font-size:11px; letter-spacing:3px; color:rgba(45,212,191,0.6); margin-bottom:32px; }
+.jkx-label { font-size:10px; letter-spacing:2px; color:rgba(255,255,255,0.4); text-align:left; margin-bottom:8px; }
+.jkx-input {
+  width:100%; background:rgba(255,255,255,0.04);
+  border:1px solid rgba(45,212,191,0.2); border-radius:7px;
+  color:#fff; font-family:'Titillium Web',monospace; font-size:15px;
+  letter-spacing:2px; padding:13px 16px; outline:none; box-sizing:border-box;
+  transition:border-color .2s; text-align:center; text-transform:uppercase;
+}
+.jkx-input:focus { border-color:rgba(45,212,191,.55); background:rgba(45,212,191,.04); }
+.jkx-input.error { border-color:rgba(255,80,80,.6); animation:jkx-shake .35s ease; }
+@keyframes jkx-shake {
+  0%,100%{transform:translateX(0)} 20%{transform:translateX(-7px)} 60%{transform:translateX(7px)}
+}
+.jkx-btn {
+  margin-top:16px; width:100%; padding:14px;
+  background:linear-gradient(135deg,#2dd4bf,#0891b2);
+  border:none; border-radius:7px; color:#071e22;
+  font-family:'Titillium Web',sans-serif; font-size:13px;
+  font-weight:700; letter-spacing:3px; cursor:pointer; transition:all .2s;
+}
+.jkx-btn:hover { opacity:.88; transform:translateY(-1px); }
+.jkx-btn:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+.jkx-err { margin-top:12px; font-size:12px; color:#ff6b6b; letter-spacing:1px; min-height:18px; }
+.jkx-contact { margin-top:22px; font-size:11px; color:rgba(255,255,255,0.28); line-height:1.9; }
+.jkx-contact b { color:rgba(45,212,191,0.65); }
+</style>
+<!-- ══ OG SPLASH SCREEN CSS ══ -->
+<style>
+#jax-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, #071e22 0%, #0a3340 30%, #0d4a54 55%, #0a3035 80%, #071820 100%);
+  font-family: 'Titillium Web', sans-serif;
+  transition: opacity 0.6s ease;
+}
+#jax-splash.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+#jax-splash::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 20% 50%, rgba(45,212,191,0.06) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(45,212,191,0.08) 0%, transparent 40%),
+    radial-gradient(circle at 60% 80%, rgba(20,184,166,0.05) 0%, transparent 40%);
+  pointer-events: none;
+}
+.splash-og-text {
+  font-size: 96px;
+  font-weight: 900;
+  letter-spacing: 18px;
+  color: #fff;
+  text-shadow:
+    0 0 40px rgba(45,212,191,0.6),
+    0 0 80px rgba(45,212,191,0.25);
+  animation: og-pulse 2s ease-in-out infinite;
+  position: relative;
+}
+@keyframes og-pulse {
+  0%, 100% { text-shadow: 0 0 40px rgba(45,212,191,0.6), 0 0 80px rgba(45,212,191,0.25); }
+  50%       { text-shadow: 0 0 60px rgba(45,212,191,0.9), 0 0 120px rgba(45,212,191,0.4); }
+}
+.splash-subtitle {
+  font-size: 11px;
+  letter-spacing: 5px;
+  color: rgba(45,212,191,0.55);
+  margin-top: 6px;
+  margin-bottom: 48px;
+  text-transform: uppercase;
+}
+.splash-loader {
+  width: 180px;
+  height: 3px;
+  background: rgba(255,255,255,0.07);
+  border-radius: 99px;
+  overflow: hidden;
+  position: relative;
+}
+.splash-loader-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #2dd4bf, #0891b2);
+  border-radius: 99px;
+  transition: width 0.1s linear;
+  box-shadow: 0 0 10px rgba(45,212,191,0.6);
+}
+.splash-loading-text {
+  margin-top: 16px;
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: rgba(255,255,255,0.25);
+  text-transform: uppercase;
+}
+</style>
+</head>
+<body>
+
+<!-- ══ KEY SCREEN ══ -->
+<div id="jax-key-screen">
+  <div class="jkx-box">
+    <div class="jkx-logo">
+      <i class="fa-solid fa-circle-nodes"></i>
+      <span>OGV.1</span>
+    </div>
+    <div class="jkx-sub">ENTER YOUR ACCESS KEY</div>
+    <div class="jkx-label">KEY</div>
+    <input class="jkx-input" id="jkxInput" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" maxlength="32">
+    <div class="jkx-err" id="jkxErr"></div>
+    <button class="jkx-btn" id="jkxBtn" onclick="jkxSubmit()">ACTIVATE</button>
+    <div class="jkx-contact">
+      Don't have a key? Contact us on Discord<br>
+      <b>dimpv</b> &nbsp;|&nbsp; <b>ilmuu.69</b>
+    </div>
+  </div>
+</div>
+
+<!-- ══ OG SPLASH SCREEN ══ -->
+<div id="jax-splash">
+  <div class="splash-og-text">OG</div>
+  <div class="splash-subtitle">OGV.1 — Loading</div>
+  <div class="splash-loader">
+    <div class="splash-loader-bar" id="splashBar"></div>
+  </div>
+  <div class="splash-loading-text" id="splashLoadingText">Initializing...</div>
+</div>
+
+
+<div class="fullscreen-root">
+
+  <!-- ══════════════════════════════════════
+       GAME CANVAS
+  ══════════════════════════════════════ -->
+  <canvas id="gameCanvas" class="game-canvas"></canvas>
+  <canvas id="orbCanvas" width="600" height="600"></canvas>
+
+
+  <!-- ══════════════════════════════════════
+       HUD OVERLAY (in-game)
+  ══════════════════════════════════════ -->
+  <div class="hud-overlay pe-none">
+    <div id="hud-server-timer" class="hud-server-timer" style="display:none"></div>
+    <div id="hud-leaderboard" class="hud-leaderboard">
+      <div class="og-private-label" style="color: purple; font-weight: bold; margin-bottom: 5px; font-family: 'Titillium Web', sans-serif; font-size: 14px; text-shadow: 0 0 5px rgba(128, 0, 128, 0.5);">OG | Private</div>
+      <div class="lb-content"></div>
+    </div>
+    <div id="pause-hud" class="pause-hud" style="display:none">
+      <i class="fa-solid fa-pause"></i>PAUSED
+    </div>
+    <div id="countdown-overlay" class="countdown-overlay" style="display:none">
+      <div class="countdown-number"></div>
+    </div>
+    <div class="hud-bottom-left pe-all" style="position: absolute; bottom: 20px; left: 20px; z-index: 999;">
+  <div id="chat-container" class="chat-container" style="display: none; background: rgba(0, 0, 0, 0.4); border-radius: 6px; padding: 12px; width: 380px; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.05);">
+    <div id="chat-resize" class="chat-resize-handle"></div>
+    
+    <div id="chat-messages" class="chat-messages" style="max-height: 280px; overflow-y: auto; margin-bottom: 10px; padding-right: 5px;"></div>
+    
+    <div id="chat-input-container" class="chat-input-wrapper">
+      <input id="chat-input" class="chat-input" type="text" placeholder="Press Enter to chat..." maxlength="120" autocomplete="off">
+    </div>
+  </div>
+</div>
+<style>
+  /* 1. Chat'in içinde hapsolduğu üst kutunun onu kesmesini (overflow) engelliyoruz */
+  /* ==========================================
+   PARENT OVERRIDE (Kesilme/Görünmeme Koruması)
+   ========================================== */
+/* ==========================================
+   1. ANA CHAT KUTUSU (SOLA VE EN ALTA ZORLANMIŞ SÜRÜM)
+   ========================================== */
+html body #chat-container, 
+html #chat-container, 
+#chat-container {
+    position: fixed !important;      
+    
+    /* 🛠️ ALTTTAKİ BOŞLUĞU YOK EDEN NEGATİF AYAR:
+       Sıfır deyince boşluk kalıyorsa, kutuyu zorla aşağı bastırıyoruz.
+       Eğer chat çok aşağı kaçarsa bu -20px değerini -10px veya -15px yap.
+       Hâlâ boşluk kalırsa -30px, -40px diyerek tam oturana kadar büyüt. */
+    bottom: -20px !important;          
+    
+    /* Soldaki çalışan ayarını aynen koruyoruz */
+    left: -30px !important;          
+    
+    right: auto !important;          
+    transform: none !important;      
+    margin: 0px !important;          
+    padding: 0px !important;         
+    box-sizing: border-box !important;
+    
+    display: flex !important;        
+    flex-direction: column !important;
+    user-select: none !important;
+    width: calc(150px + 12vh) !important; 
+    background-color: hsla(0, 0%, 7%, 0.6) !important; 
+    
+    /* Sadece sağ üst köşe oval, diğer her yer ekrana gömülü */
+    border-radius: 0 4px 0 0 !important; 
+    
+    z-index: 99999999 !important; 
+    transition: opacity .1s ease-in !important;
+    border: 1px solid rgba(255, 255, 255, 0.05) !important;
+    border-left: none !important;    
+    border-bottom: none !important;  
+}
+
+/* ==========================================
+   2. MESAJ ALANI
+   ========================================== */
+html body #chat-messages {
+    flex: 1 !important;              
+    max-height: calc(130px + 15vh) !important; 
+    overflow-y: scroll !important;
+    padding: .5vh !important;
+    margin: 0px !important; 
+    scrollbar-width: none !important; 
+    display: flex !important;
+    flex-direction: column-reverse !important; 
+}
+
+/* Webkit tarayıcılar için scrollbar gizleme */
+#chat-messages::-webkit-scrollbar {
+    background: transparent !important;
+    width: 0 !important;
+    height: 0 !important;
+}
+
+/* ==========================================
+   3. CHAT MESAJ TARZI (.chbx-message)
+   ========================================== */
+#chat-messages > div, 
+#chat-messages p, 
+#chat-messages .message-line {
+    font-size: calc(11px + .25vh) !important;
+    line-height: calc(12px + .5vh) !important;
+    margin-bottom: 1px !important;
+    padding: 2px 4px !important;
+    color: #bbb !important;
+    word-break: break-word !important;
+    transition: background-color .1s !important;
+}
+
+/* Mesajın üzerine gelince hafif aydınlanma efekti */
+#chat-messages > div:hover, 
+#chat-messages p:hover {
+    background-color: hsla(0, 0%, 100%, 0.1) !important;
+}
+
+/* Mesajı gönderen isimleri (.chbx-message-sender) */
+#chat-messages strong, 
+#chat-messages b, 
+#chat-messages .sender {
+    color: #ddd !important;
+    font-weight: 600 !important;
+    margin-right: 3px !important;
+}
+
+/* Zaman damgası varsa (.chbx-message-time) */
+#chat-messages .time {
+    color: #777 !important;
+    display: inline-block !important;
+    margin-right: 3px !important;
+}
+
+/* ==========================================
+   4. YAZI YAZMA ALANI (#chat-input)
+   Enter'a basınca ekranın alt ortasında açılır
+   ========================================== */
+/* ==========================================
+   1. CHAT INPUT CONTAINER
+   ========================================== */
+#chat-input-container {
+    position: fixed !important;
+    background: transparent !important;
+    border: none !important;
+    z-index: 1000000 !important;
+}
+
+/* ==========================================
+   2. GİRİŞ ALANI (VARSAYILAN - GİZLİ DURUM)
+   ========================================== */
+html body #chat-input, 
+html #chat-input, 
+#chat-input {
+    /* 🔒 KESİN ÇÖZÜM: Kutu normalde tamamen hayalet gibi gizli ve tıklanamaz */
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transition: opacity .15s ease-in-out, border .2s ease !important; /* Yumuşakça açılıp kapansın diye */
+
+    background-color: rgba(34, 34, 34, 0.75) !important;
+    border: 1px solid transparent !important;
+    bottom: 10vh !important;
+    color: #bbb !important;
+    font-size: calc(8px + .6vh) !important;
+    left: 55vw !important;
+    outline: none !important;
+    padding: 1vh 1.5vh !important;
+    position: fixed !important;
+    transform: translateX(-50%) !important;
+    width: calc(140px + 15vw) !important;
+    border-radius: 4px !important;
+    z-index: 1000000 !important;
+    box-sizing: border-box !important;
+}
+
+/* ==========================================
+   3. 🔥 ENTER'A BASILDIĞINDA AKTİF OLAN DURUM (FOCUS)
+   ========================================== */
+html body #chat-input:focus,
+html #chat-input:focus,
+#chat-input:focus {
+    /* 🔓 Kilit Açıldı: Sadece Enter basılıp yazı yazma moduna geçince görünür ve tıklanabilir olur */
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+#chat-input::selection {
+    background: #fff !important;
+    color: #000 !important;
+}
+
+#chat-input::-moz-selection {
+    background: #fff !important;
+    color: #000 !important;
+}
+
+#chat-input::placeholder {
+    color: #555 !important;
+}
+
+#chat-input::-moz-placeholder {
+    color: #555 !important;
+}
+</style>
+
+<div class="hud-bottom-right pe-all" style="position: absolute; bottom: 0px; right: 0px; margin: 0; padding: 0; z-index: 999;">
+  <div id="minimap-container" class="minimap-container" style="display:none; margin: 0; padding: 0;">
+    <canvas id="minimap" class="minimap" style="display: block; margin: 0; padding: 0;"></canvas>
+  </div>
+</div>
+
+<div class="hud-bottom-center pe-all">
+  <div id="stats-hud" class="stats-hud" style="display:none"></div>
+  <div id="bot-count-display" class="stat-badge" style="display:none"></div>
+</div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       LOBBY OVERLAY
+  ══════════════════════════════════════ -->
+  <div class="lobby-overlay">
+
+    <!-- Logo -->
+    <div class="jax-logo">
+      <div class="jax-logo-icon"><i class="fa-solid fa-circle-nodes"></i></div>
+      <div class="jax-logo-text">OGV.1</div>
+    </div>
+
+    <!-- Top-right nav + stats -->
+    <div class="jax-topnav">
+      <div class="jax-nav-links">
+        <span class="jax-nav-dot">•</span>
+        <button class="jax-nav-btn" id="btnInventoryNav">INVENTORY</button>
+        <span class="jax-nav-dot">•</span>
+        <button class="jax-nav-btn" id="btnRecordingNav">RECORDING</button>
+        <span class="jax-nav-dot">•</span>
+        <button class="jax-nav-btn" id="btnSettingsNav">SETTINGS</button>
+      </div>
+    </div>
+
+    <!-- Center: Skin orb + inputs -->
+    <div class="lobby-center">
+      <div class="lobby-menu">
+
+        <!-- Skin orb — clickable -->
+        <div class="menu-center single-orb" id="btnOpenSkins" style="cursor:pointer;" title="Click to open skin selector">
+          <div class="orb-rainbow-ring"></div>
+          <div class="center-content-wrapper">
+            <div class="skin-left"></div>
+            <div class="skin-right"></div>
+          </div>
+          <span class="skin-badge skin-badge-left">&#9998; SKIN 1</span>
+          <span class="skin-badge skin-badge-right">SKIN 2</span>
+        </div>
+
+        <!-- Profile slots -->
+        <div class="profile-selector-bar">
+          <div class="profile-slot active" data-slot="1" data-profile="1">1</div>
+          <div class="profile-slot" data-slot="2" data-profile="2">2</div>
+          <div class="profile-slot" data-slot="3" data-profile="3">3</div>
+          <div class="profile-slot" data-slot="4" data-profile="4">4</div>
+          <div class="profile-slot" data-slot="5" data-profile="5">5</div>
+          <div class="profile-slot" data-slot="6" data-profile="6">6</div>
+          <div class="profile-slot" data-slot="7" data-profile="7">7</div>
+          <div class="profile-slot" data-slot="8" data-profile="8">8</div>
+          <div class="profile-slot" data-slot="9" data-profile="9">9</div>
+          <div class="profile-slot" data-slot="10" data-profile="10">10</div>
+        </div>
+
+        <!-- Name + skin inputs -->
+        <div class="profile-inputs-wrapper">
+          <button class="profile-nav-arrow arrow-left"><i class="fa-solid fa-chevron-left"></i></button>
+          <div class="lobby-inputs-container">
+
+            <!-- Row 1: NICKNAME 1 + NICKNAME 2 side by side -->
+            <div class="input-row">
+              <input class="lobby-input input-nick1 input-p1" type="text" placeholder="NICKNAME 1" maxlength="32" style="flex:1;">
+              <input class="lobby-input input-nick2 input-p2" type="text" placeholder="NICKNAME 2" maxlength="32" style="flex:1;">
+
+            </div>
+
+            <!-- Row 2: TAG (centered) -->
+            <div class="input-row" style="justify-content:center;">
+              <input class="lobby-input input-tag" type="text" placeholder="TAG" maxlength="5" style="width:120px;flex:none;text-align:center;">
+            </div>
+
+            <!-- Row 3: SKIN 1 URL -->
+            <div class="input-row">
+              <input class="lobby-input input-skin1" type="text" placeholder="SKIN 1 URL (paste from sniikz.com)">
+            </div>
+
+            <!-- Row 4: SKIN 2 URL -->
+            <div class="input-row">
+              <input class="lobby-input input-skin2" type="text" placeholder="SKIN 2 URL (paste from sniikz.com)">
+            </div>
+
+            <!-- Row 5: Server selector (hidden) -->
+            <div class="server-select-container" id="serverSelectContainer" style="display:none;">
+              <div class="server-select-trigger" id="serverSelectTrigger">
+                <span class="selected-text">FFA — EUROPE</span>
+                <span class="arrow-icon"><i class="fa-solid fa-chevron-down"></i></span>
+              </div>
+              <div class="server-options">
+                <div class="server-option selected" data-value="wss://eu1.senpa.io:7101">FFA — EUROPE</div>
+              </div>
+            </div>
+
+          </div>
+          <button class="profile-nav-arrow arrow-right"><i class="fa-solid fa-chevron-right"></i></button>
+        </div>
+
+
+      </div>
+    </div>
+
+    <!-- Bottom-left server panel -->
+    <div class="jax-server-panel">
+      <div class="server-panel-card">
+        <div class="server-panel-region">
+          EUROPE
+          <button class="server-panel-cog" id="btnServerCog"><i class="fa-solid fa-gear"></i></button>
+        </div>
+        <div class="server-panel-name">EU-FFA</div>
+        <div class="server-panel-info" id="serverPlayerInfo">Connecting...</div>
+        <button class="server-panel-play"     id="btnMenu">PLAY</button>
+        <button class="server-panel-spectate" id="btnSpectate">SPECTATE</button>
+      </div>
+    </div>
+
+    <!-- Decorative dots -->
+    <div class="jax-bottom-dots">
+      <div class="jax-dot-group"><div class="jax-dot"></div><div class="jax-dot"></div><div class="jax-dot"></div><div class="jax-dot"></div></div>
+      <div class="jax-dot-group"><div class="jax-dot"></div><div class="jax-dot"></div><div class="jax-dot"></div><div class="jax-dot"></div></div>
+      <div class="jax-dot-group"><div class="jax-dot"></div><div class="jax-dot"></div><div class="jax-dot"></div><div class="jax-dot"></div></div>
+      <div class="jax-dot-group"><div class="jax-dot"></div><div class="jax-dot"></div><div class="jax-dot"></div><div class="jax-dot"></div></div>
+      <div class="jax-dot-group"><div class="jax-dot"></div><div class="jax-dot"></div><div class="jax-dot"></div><div class="jax-dot"></div></div>
+    </div>
+
+    <!-- Hidden compat bar (bundle.js hooks into these) -->
+    <div class="lobby-menu-bar" style="display:none">
+      <button class="menu-btn btn-settings" id="btnSettings"></button>
+      <button class="menu-btn btn-play"     style="display:none"></button>
+      <button class="menu-btn btn-spectate" style="display:none"></button>
+      <button class="menu-btn btn-reconnect-menu" style="display:none"></button>
+      <button class="menu-btn btn-skins"    style="display:none"></button>
+    </div>
+
+  </div><!-- .lobby-overlay -->
+
+  <!-- ══════════════════════════════════════
+       SETTINGS OVERLAY
+  ══════════════════════════════════════ -->
+  <div id="settingsOverlay" class="settings-overlay" style="display:none">
+    <div class="settings-heading">SETTINGS</div>
+    <div class="settings-tabs">
+      <button class="tab-btn active" data-tab="game"     onclick="switchTab(this,'game')">GAMEPLAY</button>
+      <button class="tab-btn"        data-tab="camera"   onclick="switchTab(this,'camera')">GRAPHICS</button>
+      <button class="tab-btn"        data-tab="theme"    onclick="switchTab(this,'theme')">THEME</button>
+      <button class="tab-btn"        data-tab="elements" onclick="switchTab(this,'elements')">ELEMENTS</button>
+      <button class="tab-btn"        data-tab="controls" onclick="switchTab(this,'controls')">CONTROLS</button>
+      <button class="tab-btn"        data-tab="chat"     onclick="switchTab(this,'chat')">CHAT</button>
+      <button class="tab-btn"        data-tab="huds"     onclick="switchTab(this,'huds')">HUDS</button>
+    </div>
+    <div class="settings-body">
+      <div class="settings-sidebar"></div>
+      <div class="settings-content" id="settingsContent"></div>
+    </div>
+    <div class="settings-footer">
+      <button class="close-settings-btn" onclick="closeSettings()">
+        <i class="fa-solid fa-chevron-left"></i> BACK [ESC]
+      </button>
+      <button class="settings-action-btn" id="btnResetAll">
+        <i class="fa-solid fa-rotate-left"></i> RESET
+      </button>
+      <button class="settings-action-btn" id="btnImport">
+        <i class="fa-solid fa-file-import"></i> IMPORT
+      </button>
+      <button class="settings-action-btn" id="btnExport">
+        <i class="fa-solid fa-file-export"></i> EXPORT
+      </button>
+      <input id="importFile" type="file" accept="application/json,.json" hidden>
+    </div>
+  </div>
+  
+
+  <!-- ══════════════════════════════════════
+       SKINS OVERLAY
+  ══════════════════════════════════════ -->
+  <div class="skins-overlay" id="skinsOverlay">
+        <div class="skins-modal">
+            <div class="skins-header">
+                <div class="skins-title">
+                    <i class="fa-solid fa-images"></i> Skin Library
+                </div>
+                <button class="skins-close-btn" id="btnCloseSkins">×</button>
+            </div>
+            <div class="skins-body">
+                <div class="skins-sidebar" id="skinsCategories">
+                </div>
+                <div class="skins-content" id="skinsContent">
+                </div>
+            </div>
+        </div>
+
+  <!-- Skin selection popup (Primary / Secondary) -->
+  <div id="skinSelectionPopup" style="display:none;position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+    <div style="background:#0b0f14;border:1px solid rgba(120,255,238,.4);border-radius:12px;padding:24px;min-width:320px;text-align:center;box-shadow:0 0 40px rgba(0,255,220,.18);">
+      <div id="skinPopupPreview" style="width:140px;height:140px;border-radius:50%;margin:0 auto 16px;background-size:cover;background-position:center;border:2px solid rgba(255,255,255,.15);"></div>
+      <div style="color:#bdf8ee;margin-bottom:14px;font-size:13px;letter-spacing:1px;">SET AS</div>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+        <button id="btnSetSkinPrimary"   style="background:#0ea5b7;color:#fff;border:none;padding:10px 18px;border-radius:8px;cursor:pointer;font-weight:600;">PRIMARY 1</button>
+        <button id="btnSetSkinSecondary" style="background:#a855f7;color:#fff;border:none;padding:10px 18px;border-radius:8px;cursor:pointer;font-weight:600;">SECONDARY 2</button>
+        <button id="btnCancelSkin"       style="background:#333;color:#fff;border:none;padding:10px 18px;border-radius:8px;cursor:pointer;">CANCEL</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ── Add URL / Primary-Secondary picker for skins (Zorunlu Katı Proxy Kilidi) ── */
+(function(){
+  function $(s){return document.querySelector(s);}
+  var pendingUrl = '';
+  var proxyPrefix = 'https://overgrounds.vercel.app/api/proxy?url=';
+
+  function formatImgurUrl(url) {
+    if (!url) return '';
+    var trimmed = window.rawSkinUrl ? window.rawSkinUrl(url) : url.trim();
+    return trimmed;
+  }
+
+  // KUTUYU GÜNCELLEYEN FONKSİYON
+  function lockInputValue(selector, value) {
+    var el = $(selector);
+    if (!el) return;
+    value = window.rawSkinUrl ? window.rawSkinUrl(value) : (value || '').trim();
+
+    // ESKİ KİLİDİ KALDIR (Eğer varsa)
+    // Object.defineProperty ile yapılan kilitleri bozmak için descriptor'ı sıfırlıyoruz
+    try {
+      var desc = Object.getOwnPropertyDescriptor(el, 'value');
+      if (desc && !desc.writable) {
+        Object.defineProperty(el, 'value', {
+          value: value,
+          writable: true,
+          configurable: true,
+          enumerable: true
+        });
+      }
+    } catch(e){}
+
+    // Değeri normal yolla ata
+    el.value = value;
+
+    // Oyunu tetikle
+    el.dispatchEvent(new Event('input',  { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  window.lockInputValue = lockInputValue;
+  window.__jaxSetSkinInputValue = lockInputValue;
+
+  function showPicker(url){
+    pendingUrl = formatImgurUrl(url); 
+    var p = $('#skinSelectionPopup');
+    var prev = $('#skinPopupPreview');
+    if (prev) prev.style.backgroundImage = "url('" + pendingUrl + "')";
+    if (p) p.style.display = 'flex';
+  }
+
+  function hidePicker(){ var p=$('#skinSelectionPopup'); if(p) p.style.display='none'; pendingUrl=''; }
+
+  function setSlot(which) {
+    if (!pendingUrl) return hidePicker();
+    var sel = which === 1 ? '.input-skin1' : '.input-skin2';
+    
+    // Güçlendirilmiş katı kilidi uyguluyoruz
+    lockInputValue(sel, pendingUrl);
+
+    // Hafızaya (LocalStorage) da yazıyoruz
+    try {
+      var n = parseInt(localStorage.getItem('eon_currentProfile')||'1',10);
+      var p = JSON.parse(localStorage.getItem('eon_profile_'+n)||'{}');
+      if (which === 1) p.primarySkin = pendingUrl; else p.secondarySkin = pendingUrl;
+      localStorage.setItem('eon_profile_'+n, JSON.stringify(p));
+    }catch(e){}
+
+    if (window.__jaxApplySkinsToGame) window.__jaxApplySkinsToGame();
+
+    if (window.__jaxSyncSkinPreviews) window.__jaxSyncSkinPreviews();
+    hidePicker();
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    var add = $('#btnAddCustomSkin');
+    if (add) add.addEventListener('click', function(){
+      var u = prompt('Paste skin image URL (jpg/png/webp/gif):');
+      if (u && u.trim()) {
+        showPicker(u);
+      }
+    });
+
+    var p1 = $('#btnSetSkinPrimary');   if (p1) p1.addEventListener('click', function(){ setSlot(1); });
+    var p2 = $('#btnSetSkinSecondary'); if (p2) p2.addEventListener('click', function(){ setSlot(2); });
+    var pc = $('#btnCancelSkin');       if (pc) pc.addEventListener('click', hidePicker);
+
+    var content = $('#skinsContent');
+    if (content) content.addEventListener('click', function(e){
+      var el = e.target.closest('[data-skin-url], .skin-item, .skin-tile, img');
+      if (!el) return;
+      var url = el.getAttribute('data-skin-url') || el.getAttribute('src') ||
+                (el.style && (el.style.backgroundImage||'').match(/url\(["']?([^"')]+)["']?\)/) || [])[1];
+      if (url) { 
+        e.stopPropagation(); 
+        showPicker(url); 
+      }
+    }, true);
+  });
+
+  window.__jaxShowSkinPicker = showPicker;
+})();
+</script>
+
+  <!-- ══════════════════════════════════════
+       TEAM OVERLAY
+  ══════════════════════════════════════ -->
+  <div id="jaxTeamOverlay" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.65);align-items:center;justify-content:center;">
+    <div style="background:#0d1117;border:1px solid rgba(45,212,191,0.28);border-radius:10px;padding:30px 34px;min-width:320px;font-family:'Titillium Web',sans-serif;box-shadow:0 20px 60px rgba(0,0,0,0.8);">
+      <div style="font-size:12px;font-weight:900;letter-spacing:5px;color:#2dd4bf;margin-bottom:6px;text-align:center;">JOIN TEAM</div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.35);letter-spacing:1px;margin-bottom:16px;text-align:center;">Enter a team PIN to play with friends</div>
+      <input id="jaxTeamCodeInput" type="text" maxlength="5"
+             placeholder="ENTER PIN"
+             autocomplete="off"
+             style="width:100%;box-sizing:border-box;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#fff;font-family:'Titillium Web',sans-serif;font-size:18px;font-weight:700;padding:12px 14px;outline:none;margin-bottom:16px;letter-spacing:4px;text-transform:uppercase;text-align:center;">
+      <div style="display:flex;gap:10px;">
+        <button id="jaxTeamJoinBtn"   style="flex:1;background:linear-gradient(135deg,#2dd4bf,#14b8a6);border:none;color:#000;font-family:'Titillium Web',sans-serif;font-size:12px;font-weight:900;letter-spacing:2px;padding:12px;border-radius:6px;cursor:pointer;">JOIN</button>
+        <button id="jaxTeamLeaveBtn"  style="flex:0 0 auto;background:rgba(255,80,80,0.12);border:1px solid rgba(255,80,80,0.28);color:rgba(255,130,130,0.9);font-family:'Titillium Web',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;padding:12px 16px;border-radius:6px;cursor:pointer;">LEAVE</button>
+        <button id="jaxTeamCancelBtn" style="flex:0 0 auto;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.55);font-family:'Titillium Web',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;padding:12px 16px;border-radius:6px;cursor:pointer;">CANCEL</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reconnect overlay -->
+  <div id="reconnectOverlay" class="reconnect-overlay" style="display:none">
+    <div class="reconnect-box">
+      <div class="reconnect-title">RECONNECTING</div>
+      <div class="reconnect-message">Please wait...</div>
+      <button id="btnReconnectNow" class="reconnect-btn">RECONNECT NOW</button>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+
+</div><!-- .fullscreen-root -->
+
+<script>
+function switchTab(btn, tabId) {
+  document.querySelectorAll('.settings-tabs .tab-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+}
+function closeSettings() {
+  var el = document.getElementById('settingsOverlay');
+  if (el) el.style.display = 'none';
+  var ryuSp = document.getElementById('ryu-settings-panel');
+  if (ryuSp) ryuSp.classList.remove('ryu-sp-open');
+}
+document.addEventListener('keydown', function(e) {
+  if (e.key !== 'Escape') return;
+  var panels = ['settingsOverlay','jaxTeamOverlay','skinsOverlay'];
+  for (var i = 0; i < panels.length; i++) {
+    var el = document.getElementById(panels[i]);
+    if (el && el.style.display !== 'none') { el.style.display = 'none'; return; }
+  }
+  var ryuSp = document.getElementById('ryu-settings-panel');
+  if (ryuSp && ryuSp.classList.contains('ryu-sp-open')) {
+    ryuSp.classList.remove('ryu-sp-open');
+  }
+});
+</script>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SCRIPT LOADING ORDER  —  critical, do not reorder:
+       1. extension-bridge  sets chrome attribute, no DOM deps
+       2. loading           early loading screen
+       3. ryutheme          MUST wrap window.WebSocket before bundle!
+       4. wasmLoader
+       5. bundle            main game engine
+       6. ryuten-patched    post-bundle patches
+       7. interface         custom shop/inventory UI overlays
+       8. leaderboard       custom leaderboard redesign
+       9. team              in-game team HUD
+      10. relay-client      multiplayer relay
+      11. replaysys         replays gallery (patched: no /play/ check)
+      12. profiles          profile management
+     ═══════════════════════════════════════════════════════════════ -->
+<script src="onyx-ws-hook.js"></script>
+<script src="wasmLoader.js"></script>
+<script src="auth-session-bridge.js"></script>
+<script src="auth-bridge.js"></script>
+<script src="bundle.js"></script>
+<script src="onyx-host-bridge.js"></script>
+<script src="interface.js"></script>
+<script src="ryu-shield-title.js"></script>
+<script src="ryu-chat.js"></script>
+<script src="replaysys.js"></script>
+<script src="arrow-rings-hotkey.js"></script>
+
+<script>
+/* ════════════════════════════════════════════════════════════════
+   JAX-V5  —  Lobby Wiring Script
+   Connects the custom lobby UI to the game engine (bundle.js)
+   ════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+  var __eonApplyingProfile = false;
+
+  /* ── Helper: dispatch events so bundle.js/ryutheme react ── */
+  function commitNativeInput(el, val) {
+    if (!el) return;
+    el.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+    el.value = val;
+    el.dispatchEvent(new Event('input',  { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+  }
+
+  /* ── Sync custom inputs → native game internals ── */
+  function syncNick1() {
+    var v = (document.querySelector('.input-nick1') || {}).value || '';
+    /* Try common native nick input IDs (varies by bundle version) */
+    var el = document.getElementById('nick-input') ||
+             document.getElementById('nick') ||
+             document.getElementById('player-name');
+    if (el) commitNativeInput(el, v);
+    try { if (window.__Be && window.__Be._1059) window.__Be._1059._6988 = v; } catch (_) {}
+  }
+
+  function syncNick2() {
+    var v = (document.querySelector('.input-nick2') || {}).value || '';
+    var el = document.getElementById('nick2-input') || document.getElementById('nick2');
+    if (el) commitNativeInput(el, v);
+  }
+
+  function syncSkins() {
+    var i1 = document.querySelector('.input-skin1');
+    var i2 = document.querySelector('.input-skin2');
+    
+    // Değerleri alırken hata almamak için kontrol ekle
+    var raw1 = "";
+    var raw2 = "";
+    try { raw1 = (i1 && i1.value) || ""; } catch(e) {}
+    try { raw2 = (i2 && i2.value) || ""; } catch(e) {}
+    
+    // Görünen değeri temizle (proxy'siz hali)
+    var clean1 = window.rawSkinUrl ? window.rawSkinUrl(raw1) : raw1;
+    var clean2 = window.rawSkinUrl ? window.rawSkinUrl(raw2) : raw2;
+    
+    // Eğer kilitliyse (readonly ise) zorla güncelleme yapma, sadece iç değerleri kullan
+    try {
+      if (i1 && !Object.getOwnPropertyDescriptor(i1, 'value').writable) { /* locked */ }
+      else if (i1 && i1.value !== clean1) { i1.value = clean1; }
+      
+      if (i2 && !Object.getOwnPropertyDescriptor(i2, 'value').writable) { /* locked */ }
+      else if (i2 && i2.value !== clean2) { i2.value = clean2; }
+    } catch(e) {
+      // Eğer value ataması hala hata veriyorsa (defineProperty yüzünden), 
+      // en azından oyun motoruna gönderilecek değerleri hazırla
+    }
+
+    // Oyun motoru için proxy'li URL'leri hazırla
+    var p1 = clean1 ? (window.proxyUrl ? window.proxyUrl(clean1) : clean1) : '';
+    var p2 = clean2 ? (window.proxyUrl ? window.proxyUrl(clean2) : clean2) : '';
+
+    try {
+      // 1. App Player nesnesi: bundle.js oyuna girerken skinleri buradan okuyor.
+      if (window.app && window.app.player) {
+        window.app.player.skin1 = p1;
+        window.app.player.skin2 = p2;
+      }
+      // Skin ayarları kapalı kalmışsa kendi skin hücreye çizilmiyor; zorla açık tut.
+      if (window.app && window.app.settings && typeof window.app.settings.set === 'function') {
+        window.app.settings.set('showGlobalSkins', true);
+        window.app.settings.set('showSkins', true);
+      }
+      if (window.app && window.app.dualConnectionHandler && typeof window.app.dualConnectionHandler.forEachClient === 'function') {
+        window.app.dualConnectionHandler.forEachClient(function(client) {
+          try { if (client && typeof client.sendPlayerInfo === 'function') client.sendPlayerInfo(); } catch (_) {}
+        });
+      }
+      // 2. LocalStorage user-data (yeniden yükleme/profil için)
+      var ud = JSON.parse(localStorage.getItem('user-data') || 'null');
+      if (Array.isArray(ud)) {
+        ud[2] = p1; ud[3] = p2;
+        localStorage.setItem('user-data', JSON.stringify(ud));
+      }
+    } catch (_) {}
+    
+    if (window.__jaxSyncSkinPreviews) window.__jaxSyncSkinPreviews();
+  }
+
+  window.__jaxApplySkinsToGame = syncSkins;
+
+  function syncTag() {
+    var v = (document.querySelector('.input-tag') || {}).value || '';
+    commitNativeInput(document.getElementById('team-input'), v);
+  }
+
+  /* ── Restore saved lobby input values ── */
+  function restoreSavedInputs() {
+    try {
+      var saved = JSON.parse(localStorage.getItem('jaxLobbyInputs') || '{}');
+      var n1  = document.querySelector('.input-nick1');
+      var n2  = document.querySelector('.input-nick2');
+      var s1  = document.querySelector('.input-skin1');
+      var s2  = document.querySelector('.input-skin2');
+      var tag = document.querySelector('.input-tag');
+      function commit(el, val) {
+        if (!el) return;
+        el.value = val;
+        el.dispatchEvent(new Event('input',  { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      if (saved.nick1 && n1)  commit(n1, saved.nick1);
+      if (saved.nick2 && n2)  commit(n2, saved.nick2);
+      if (saved.skin1 && s1)  commit(s1, saved.skin1);
+      if (saved.skin2 && s2)  commit(s2, saved.skin2);
+      if (saved.tag   && tag) commit(tag, saved.tag);
+    } catch (_) {}
+  }
+
+  function autoSaveInputs() {
+    if (__eonApplyingProfile) return;
+    try {
+      localStorage.setItem('jaxLobbyInputs', JSON.stringify({
+        nick1: (document.querySelector('.input-nick1') || {}).value || '',
+        nick2: (document.querySelector('.input-nick2') || {}).value || '',
+        skin1: (document.querySelector('.input-skin1') || {}).value || '',
+        skin2: (document.querySelector('.input-skin2') || {}).value || '',
+        tag:   (document.querySelector('.input-tag')   || {}).value || ''
+      }));
+    } catch (_) {}
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     NAV BUTTONS — SHOP / INVENTORY / REPLAYS
+     Strategy (two-level):
+       1. Call globalThis.__ryuOpenShop/Inventory/Replays directly —
+          these are exposed by our patched interface.js and work even
+          without a live game server (they create stub #shop-menu,
+          #inventory-menu, #gallery elements automatically).
+       2. Fall back to clicking native TRB buttons if the game
+          connected and created them.
+  ══════════════════════════════════════════════════════════ */
+
+  /* Create stub native menu elements so ryutheme inject functions
+     can work without a live server connection. */
+  function ensureMenuStubs() {
+    var stubs = [
+      { id: 'inventory-menu', z: 9998 },
+      { id: 'gallery',        z: 9997 },
+      { id: 'main-menu',      z: 1    }
+    ];
+    stubs.forEach(function (s) {
+      if (!document.getElementById(s.id)) {
+        var el = document.createElement('div');
+        el.id = s.id;
+        el.style.cssText = 'display:block;position:fixed;inset:0;z-index:' +
+          s.z + ';background:transparent;pointer-events:none;';
+        document.body.appendChild(el);
+      }
+    });
+  }
+
+  /* Wire a nav button: prefer global inject fn, fall back to native btn */
+  function wireNavAction(customId, globalFnName, nativeBtnId) {
+    var customBtn = document.getElementById(customId);
+    if (!customBtn || customBtn._ryuNavWired) return;
+    customBtn._ryuNavWired = true;
+
+    customBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      ensureMenuStubs();
+
+      /* Prefer direct inject function (works offline) */
+      if (typeof window[globalFnName] === 'function') {
+        window[globalFnName]();
+        return;
+      }
+      /* Fallback: click native TRB button (requires server) */
+      var nb = document.getElementById(nativeBtnId);
+      if (nb) nb.click();
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    ensureMenuStubs();
+    wireNavAction('btnInventoryNav', '__ryuOpenInventory', 'mame-trb-inventory-btn');
+    wireNavAction('btnRecordingNav', '__ryuOpenRecordings', null);
+  });
+
+  /* Also wire after a short delay in case DOM loaded already */
+  setTimeout(function () {
+    ensureMenuStubs();
+    wireNavAction('btnInventoryNav', '__ryuOpenInventory', 'mame-trb-inventory-btn');
+    wireNavAction('btnReplaysNav',   '__ryuOpenReplays',   'mame-trb-replays-btn');
+  }, 500);
+
+  /* ══════════════════════════════════════════════════════════
+     SETTINGS NAV BUTTON
+     Prefers ryutheme's ryu-settings-panel, falls back to
+     the custom settingsOverlay.
+  ══════════════════════════════════════════════════════════ */
+  var _settingsTries = 0;
+  var _settingsTimer = setInterval(function () {
+    _settingsTries++;
+    var btn = document.getElementById('btnSettingsNav');
+    if (!btn || btn._settingsWired) { if (_settingsTries > 100) clearInterval(_settingsTimer); return; }
+    btn._settingsWired = true;
+    clearInterval(_settingsTimer);
+
+    btn.addEventListener('click', function () {
+      /* Try ryutheme settings panel */
+      var nativeSettings = document.getElementById('btnSettings');
+      if (nativeSettings) { nativeSettings.click(); return; }
+      /* Fallback */
+      var ov = document.getElementById('settingsOverlay');
+      if (ov) ov.style.display = (ov.style.display === 'none' ? 'flex' : 'none');
+    });
+  }, 200);
+
+  /* ══════════════════════════════════════════════════════════
+     SKIN ORB — opens native custom-skin-menu or fallback overlay
+  ══════════════════════════════════════════════════════════ */
+  var _skinOrbTries = 0;
+  var _skinOrbTimer = setInterval(function () {
+    _skinOrbTries++;
+    var nativeSkins = document.querySelector('.btn-skins') ||
+                      document.getElementById('custom-skin-menu-trigger');
+    var orbBtn = document.getElementById('btnOpenSkins');
+    if (orbBtn && !orbBtn._skinWired) {
+      orbBtn._skinWired = true;
+      orbBtn.addEventListener('click', function () {
+        if (nativeSkins) { nativeSkins.click(); return; }
+        var ov = document.getElementById('skinsOverlay');
+        if (ov) ov.style.display = (ov.style.display === 'none' ? 'flex' : 'none');
+      });
+    }
+    if (_skinOrbTries > 80) clearInterval(_skinOrbTimer);
+  }, 300);
+
+  /* ══════════════════════════════════════════════════════════
+     DOMContentLoaded wiring
+  ══════════════════════════════════════════════════════════ */
+  function wireClientUi() {
+
+    /* Restore & wire inputs */
+    restoreSavedInputs();
+
+    var n1  = document.querySelector('.input-nick1');
+    var n2  = document.querySelector('.input-nick2');
+    var s1  = document.querySelector('.input-skin1');
+    var s2  = document.querySelector('.input-skin2');
+    var tag = document.querySelector('.input-tag');
+
+    [n1, n2, s1, s2, tag].forEach(function (el) {
+      if (el) { el.addEventListener('input', autoSaveInputs); }
+    });
+    if (n1)  n1.addEventListener('input',  syncNick1);
+    if (n2)  n2.addEventListener('input',  syncNick2);
+    if (s1)  s1.addEventListener('input',  syncSkins);
+    if (s2)  s2.addEventListener('input',  syncSkins);
+    if (tag) tag.addEventListener('input', syncTag);
+
+    /* ── PLAY button ── */
+    var playBtn = document.getElementById('btnMenu');
+    if (playBtn) {
+      playBtn.addEventListener('click', function () {
+        console.log('[JaxxV6 UI] Play requested');
+        syncNick1(); syncNick2(); syncSkins(); syncTag();
+        var bp = document.querySelector('.btn-play');
+        if (bp) bp.click();
+      });
+    }
+
+    /* ── SPECTATE button ── */
+    var specBtn = document.getElementById('btnSpectate');
+    if (specBtn) {
+      specBtn.addEventListener('click', function () {
+        console.log('[JaxxV6 UI] Spectate requested');
+        var bs = document.querySelector('.btn-spectate');
+        if (bs) bs.click();
+      });
+    }
+
+    /* ── Close skins overlay ── */
+    var closeSkins = document.getElementById('btnCloseSkins');
+    if (closeSkins) {
+      closeSkins.addEventListener('click', function () {
+        document.getElementById('skinsOverlay').style.display = 'none';
+      });
+    }
+
+    /* ── Server dropdown ── */
+    var trigger   = document.getElementById('serverSelectTrigger');
+    var container = document.getElementById('serverSelectContainer');
+    if (trigger && container) {
+      trigger.addEventListener('click', function (e) {
+        e.stopPropagation();
+        container.classList.toggle('open');
+      });
+      document.addEventListener('click', function () { container.classList.remove('open'); });
+    }
+
+    /* ── Profile slot selector (FIX: persists nickname/skin/tag per slot) ── */
+    function __eonActiveSlot(){
+      var num = parseInt(localStorage.getItem('eon_currentProfile') || '1', 10);
+      if (isNaN(num) || num < 1 || num > 10) num = 1;
+      return num;
+    }
+    function __eonReadRawProfile(num){
+      try { return JSON.parse(localStorage.getItem('eon_profile_'+num) || '{}') || {}; }
+      catch(_) { return {}; }
+    }
+    function __eonNormalizeProfile(p){
+      p = p || {};
+      return {
+        nick1:         p.nick1 || p.primaryNickname || p.name || '',
+        nick2:         p.nick2 || p.secondaryNickname || '',
+        primarySkin:   p.primarySkin || p.skin1 || '',
+        secondarySkin: p.secondarySkin || p.skin2 || '',
+        tag:           p.tag || p.lastClanTag || ''
+      };
+    }
+    function __eonProfileHasData(p){
+      p = __eonNormalizeProfile(p);
+      return !!(p.nick1 || p.nick2 || p.primarySkin || p.secondarySkin || p.tag);
+    }
+    function __eonWriteProfile(num, patch){
+      try {
+        var p = __eonReadRawProfile(num);
+        for (var k in patch) p[k] = patch[k];
+        localStorage.setItem('eon_profile_'+num, JSON.stringify(p));
+      } catch(_) {}
+    }
+    function __eonCaptureCurrent(){
+      if (__eonApplyingProfile) return;
+      var num = __eonActiveSlot();
+      
+      // Kilitli inputlardan değer okurken try-catch kullanmak daha güvenlidir
+      var v_s1 = ""; try { v_s1 = (s1 && s1.value) || ""; } catch(e) {}
+      var v_s2 = ""; try { v_s2 = (s2 && s2.value) || ""; } catch(e) {}
+      
+      var data = {
+        nick1:             (n1  && n1.value)  || '',
+        nick2:             (n2  && n2.value)  || '',
+        primaryNickname:   (n1  && n1.value)  || '',
+        secondaryNickname: (n2  && n2.value)  || '',
+        primarySkin:       v_s1,
+        secondarySkin:     v_s2,
+        tag:               (tag && tag.value) || '',
+        lastClanTag:       (tag && tag.value) || ''
+      };
+      __eonWriteProfile(num, data);
+    }
+    /* Live-persist edits into the active profile slot */
+    [n1, n2, s1, s2, tag].forEach(function(el){
+      if (!el) return;
+      ['input','change','blur'].forEach(function(ev){
+        el.addEventListener(ev, __eonCaptureCurrent);
+      });
+    });
+    /* Also flush on tab close / hide so nothing is lost */
+    window.addEventListener('beforeunload',     __eonCaptureCurrent);
+    window.addEventListener('pagehide',         __eonCaptureCurrent);
+    document.addEventListener('visibilitychange', function(){
+      if (document.visibilityState === 'hidden') __eonCaptureCurrent();
+    });
+
+    /* ── Initialize: load the persisted active slot on page load ── */
+    (function __eonInitActiveSlot(){
+      var activeNum = __eonActiveSlot();
+      localStorage.setItem('eon_currentProfile', String(activeNum));
+      document.querySelectorAll('.profile-slot').forEach(function (s) {
+        s.classList.toggle('active', parseInt(s.dataset.slot,10) === activeNum);
+      });
+      var raw = __eonReadRawProfile(activeNum);
+      /* Only override inputs if this slot has saved data; otherwise keep restored generic values */
+      if (__eonProfileHasData(raw)) {
+        var p = __eonNormalizeProfile(raw);
+        __eonApplyingProfile = true;
+        if (n1)  n1.value  = p.nick1;
+        if (n2)  n2.value  = p.nick2;
+        if (s1)  lockInputValue('.input-skin1', p.primarySkin);
+        if (s2)  lockInputValue('.input-skin2', p.secondarySkin);
+        if (tag) tag.value = p.tag;
+        __eonApplyingProfile = false;
+        syncNick1(); syncNick2(); syncSkins(); syncTag();
+      } else {
+        /* Seed this slot with whatever was restored from generic storage so nothing is lost */
+        __eonCaptureCurrent();
+      }
+      autoSaveInputs();
+    })();
+
+    document.querySelectorAll('.profile-slot').forEach(function (slot) {
+      /* Capture-phase mousedown: flush BEFORE the switch click handler runs */
+      slot.addEventListener('mousedown', __eonCaptureCurrent, true);
+
+      slot.addEventListener('click', function () {
+        /* 1) Save the outgoing profile first */
+        __eonCaptureCurrent();
+
+        document.querySelectorAll('.profile-slot').forEach(function (s) { s.classList.remove('active'); });
+        slot.classList.add('active');
+        var pNum = parseInt(slot.dataset.slot, 10);
+        localStorage.setItem('eon_currentProfile', pNum);
+        localStorage.setItem('ryuActiveProfile',   String(pNum - 1));
+
+        /* 2) Load the incoming profile */
+        var p = __eonNormalizeProfile(__eonReadRawProfile(pNum));
+        __eonApplyingProfile = true;
+        if (n1)  n1.value  = p.nick1;
+        if (n2)  n2.value  = p.nick2;
+        if (s1)  lockInputValue('.input-skin1', p.primarySkin);
+        if (s2)  lockInputValue('.input-skin2', p.secondarySkin);
+        if (tag) tag.value = p.tag;
+        __eonApplyingProfile = false;
+        syncNick1(); syncNick2(); syncSkins(); syncTag();
+        autoSaveInputs();
+      }, true);
+    });
+
+    /* ── Reconnect ── */
+    var rcNow = document.getElementById('btnReconnectNow');
+    if (rcNow) {
+      rcNow.addEventListener('click', function () {
+        document.getElementById('reconnectOverlay').style.display = 'none';
+        var rcBtn = document.getElementById('btnReconnect') ||
+                    document.querySelector('.btn-reconnect-menu');
+        if (rcBtn) rcBtn.click();
+      });
+    }
+
+    /* ════════════════════════════
+       TEAM OVERLAY
+    ════════════════════════════ */
+    var teamBtn     = document.getElementById('btnTeamLobby');
+    var teamOverlay = document.getElementById('jaxTeamOverlay');
+    var codeInput   = document.getElementById('jaxTeamCodeInput');
+    var joinBtn     = document.getElementById('jaxTeamJoinBtn');
+    var leaveBtn    = document.getElementById('jaxTeamLeaveBtn');
+    var cancelBtn   = document.getElementById('jaxTeamCancelBtn');
+
+    function openTeamOverlay() {
+      teamOverlay.style.display = 'flex';
+      var nativePin  = document.getElementById('pin-input');
+      var nativeTeam = document.getElementById('team-input');
+      if (codeInput) {
+        codeInput.value = (nativePin && nativePin.value) ||
+                          (nativeTeam && nativeTeam.value) || '';
+        setTimeout(function () { codeInput.focus(); }, 50);
+      }
+    }
+
+    function closeTeamOverlay() {
+      teamOverlay.style.display = 'none';
+    }
+
+    if (teamBtn)   teamBtn.addEventListener('click', openTeamOverlay);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeTeamOverlay);
+
+    if (leaveBtn) {
+      leaveBtn.addEventListener('click', function () {
+        commitNativeInput(document.getElementById('pin-input'),  '');
+        commitNativeInput(document.getElementById('team-input'), '');
+        if (codeInput) codeInput.value = '';
+        closeTeamOverlay();
+        if (window.__ryuShowToast) window.__ryuShowToast('Left team.', 'info');
+      });
+    }
+
+    if (joinBtn) {
+      joinBtn.addEventListener('click', function () {
+        var code = codeInput ? codeInput.value.trim().toUpperCase() : '';
+        /* Write to native pin-input (team PIN join) */
+        var nativePin = document.getElementById('pin-input');
+        if (nativePin) {
+          commitNativeInput(nativePin, code);
+        } else {
+          /* Fallback: write to team-input */
+          commitNativeInput(document.getElementById('team-input'), code);
+        }
+        /* ryutheme game internals */
+        try {
+          if (window.__Be && typeof window.__Be._7731 === 'function') window.__Be._7731(code);
+        } catch (_) {}
+        closeTeamOverlay();
+        if (window.__ryuShowToast) {
+          window.__ryuShowToast(code ? ('Team PIN set: ' + code) : 'Team PIN cleared.', 'success');
+        }
+      });
+    }
+
+    /* Enter key submits */
+    if (codeInput) {
+      codeInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && joinBtn) joinBtn.click();
+      });
+    }
+
+    /* Backdrop click closes */
+    if (teamOverlay) {
+      teamOverlay.addEventListener('click', function (e) {
+        if (e.target === teamOverlay) closeTeamOverlay();
+      });
+    }
+
+    /* ════════════════════════════
+       Stats bar live update
+    ════════════════════════════ */
+    setInterval(function () {
+      try {
+        var acc = window.__Be && window.__Be._1059;
+        if (!acc) return;
+        var rankEl  = document.getElementById('statRank');
+        var rpEl    = document.getElementById('statRP');
+        var rcEl    = document.getElementById('statRC');
+        var lvlEl   = document.getElementById('statLevel');
+        var userEl  = document.getElementById('statUser');
+        var rank  = (acc._3210 && acc._3210.name) ? acc._3210.name.toUpperCase() : 'UNRANKED';
+        var rp    = typeof acc._4622 !== 'undefined' ? acc._4622 : 0;
+        var rc    = typeof acc._8841 !== 'undefined' ? acc._8841 : 0;
+        var lvl   = typeof acc._6177 !== 'undefined' ? acc._6177 : 0;
+        var uname = acc._3290 || '';
+        if (!uname) {
+          var unEl = document.getElementById('mame-trb-user-data-username');
+          uname = unEl ? unEl.textContent.trim() : 'Guest';
+        }
+        if (rankEl) rankEl.innerHTML = '<i class="fa-solid fa-trophy"></i> ' + rank;
+        if (rpEl)   rpEl.innerHTML   = '<i class="fa-solid fa-star"></i> '   + rp + ' RP';
+        if (rcEl)   rcEl.innerHTML   = '<i class="fa-solid fa-gem"></i> '    + rc + ' RC';
+        if (lvlEl)  lvlEl.innerHTML  = '<i class="fa-solid fa-bolt"></i> LVL ' + lvl;
+        if (userEl) userEl.innerHTML = '<i class="fa-solid fa-user"></i> '   + uname;
+      } catch (_) {}
+    }, 2000);
+
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireClientUi, { once: true });
+  } else {
+    wireClientUi();
+  }
+
+})();
+</script>
+<script>
+window.addEventListener('load', function() {
+    var tc = document.getElementById('toast-container');
+    if (tc && tc.parentElement !== document.body) {
+        document.body.appendChild(tc);
+    }
+});
+</script>
+
+<!-- ══ SPLASH + KEY SYSTEM SCRIPT ══ -->
+<script>
+(function() {
+  var SUPABASE_URL = 'https://jdfjdfhlorzdccfpptoc.supabase.co';
+  // This is the public/publishable key only. Never put a service-role key here.
+  var SUPABASE_KEY = 'sb_publishable_nUqj6lZPGSPx_T5XtobTMg_KOD15ST_';
+  var LICENSE_FUNCTION_URL = SUPABASE_URL + '/functions/v1/validate-license';
+  var STORAGE_KEY  = 'jax_v5_key';
+
+  /* ── SPLASH SCREEN ── */
+  function runSplash(onDone) {
+    var splash = document.getElementById('jax-splash');
+    var bar    = document.getElementById('splashBar');
+    var txt    = document.getElementById('splashLoadingText');
+    if (!splash) { onDone(); return; }
+
+    var steps    = ['Initializing...', 'Loading assets...', 'Connecting...', 'Almost ready...', 'Welcome!'];
+    var progress = 0;
+
+    var iv = setInterval(function() {
+      progress += Math.random() * 14 + 7;
+      if (progress >= 100) progress = 100;
+      if (bar) bar.style.width = progress + '%';
+      if (txt) txt.textContent = steps[Math.min(Math.floor(progress / 25), steps.length - 1)];
+
+      if (progress >= 100) {
+        clearInterval(iv);
+        setTimeout(function() {
+          splash.style.opacity = '0';
+          splash.style.transition = 'opacity 0.5s';
+          setTimeout(function() {
+            splash.style.display = 'none';
+            onDone();
+          }, 520);
+        }, 350);
+      }
+    }, 110);
+  }
+
+  /* Generate a unique device fingerprint */
+  function getDeviceId() {
+    var id = localStorage.getItem('jax_device_id');
+    if (!id) {
+      id = 'dev_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('jax_device_id', id);
+    }
+    return id;
+  }
+
+  async function checkLicenseOnServer(keyVal) {
+    var res = await fetch(LICENSE_FUNCTION_URL, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        key: String(keyVal || '').trim().toUpperCase(),
+        deviceId: getDeviceId()
+      })
+    });
+    var data = {};
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok || !data.ok) {
+      var error = new Error(data.error || 'License validation failed');
+      error.code = data.code || 'INVALID';
+      throw error;
+    }
+    return data;
+  }
+
+  function showErr(msg) {
+    var e = document.getElementById('jkxErr');
+    var i = document.getElementById('jkxInput');
+    e.textContent = msg;
+    i.classList.add('error');
+    setTimeout(function() { i.classList.remove('error'); }, 400);
+  }
+
+  function unlockApp() {
+    var screen = document.getElementById('jax-key-screen');
+    if (!screen) return;
+    screen.style.opacity = '0';
+    screen.style.transition = 'opacity 0.5s';
+    setTimeout(function() { screen.style.display = 'none'; }, 550);
+  }
+
+  async function validateKey(keyVal) {
+    var btn = document.getElementById('jkxBtn');
+    btn.disabled = true;
+    btn.textContent = 'CHECKING...';
+
+    try {
+      await checkLicenseOnServer(keyVal);
+      localStorage.setItem(STORAGE_KEY, keyVal.trim().toUpperCase());
+      unlockApp();
+    } catch (e) {
+      var message = '✗ Connection error — try again';
+      if (e.code === 'NOT_FOUND') message = '✗ Invalid key — contact support';
+      if (e.code === 'BANNED') message = '✗ This key has been banned';
+      if (e.code === 'SHARED') message = '✗ Key shared — access revoked';
+      showErr(message);
+      btn.disabled = false;
+      btn.textContent = 'ACTIVATE';
+    }
+  }
+
+  /* Check saved key on load */
+  async function init() {
+    /* Hide key screen until splash finishes */
+    var keyScreen = document.getElementById('jax-key-screen');
+    if (keyScreen) keyScreen.style.display = 'none';
+
+    runSplash(async function() {
+      var saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        try {
+          await checkLicenseOnServer(saved);
+          /* Valid saved key — go straight in */
+          return;
+        } catch (e) {
+          localStorage.removeItem(STORAGE_KEY);
+          if (e.code === 'BANNED') {
+            document.getElementById('jkxErr').textContent = '✗ Your key has been banned';
+          }
+        }
+      }
+      /* Show key screen */
+      if (keyScreen) {
+        keyScreen.style.display = 'flex';
+        keyScreen.style.opacity = '0';
+        setTimeout(function() { keyScreen.style.opacity = '1'; keyScreen.style.transition = 'opacity 0.4s'; }, 20);
+      }
+    });
+  }
+
+  /* Enter key support */
+  document.getElementById('jkxInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') jkxSubmit();
+  });
+
+  window.jkxSubmit = function() {
+    var val = document.getElementById('jkxInput').value.trim();
+    if (!val) { showErr('✗ Please enter your key'); return; }
+    validateKey(val);
+  };
+
+  init();
+})();
+</script>
+</body>
+</html>

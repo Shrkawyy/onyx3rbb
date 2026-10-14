@@ -1,0 +1,118 @@
+/* ══════════════════════════════════════
+   DELTA THEME — Reconnect Overlay
+   ══════════════════════════════════════ */
+
+.reconnect-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(13, 17, 23, 0.9);
+    backdrop-filter: blur(6px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 500;
+    flex-direction: column;
+    gap: 20px;
+    font-family: 'Titillium Web', sans-serif;
+}
+
+.reconnect-overlay.active { display: flex; }
+
+.reconnect-icon {
+    font-size: 56px;
+    color: #3b82f6;
+    animation: reconnectSpin 2s linear infinite;
+    text-shadow: 0 0 30px rgba(59, 130, 246, 0.8);
+}
+
+@keyframes reconnectSpin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+.reconnect-title {
+    font-size: 28px;
+    font-weight: 300;
+    color: #fff;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    text-align: center;
+}
+
+.reconnect-sub {
+    font-size: 15px;
+    color: #6b7280;
+    font-weight: 300;
+    text-align: center;
+}
+
+.reconnect-timer {
+    font-size: 48px;
+    font-weight: 300;
+    color: #3b82f6;
+    text-shadow: 0 0 24px rgba(59, 130, 246, 0.7);
+    line-height: 1;
+}
+
+.reconnect-btn {
+    background: linear-gradient(to bottom, #2563eb, #1d4ed8);
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    color: #fff;
+    padding: 12px 32px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: 'Titillium Web', sans-serif;
+    font-size: 15px;
+    font-weight: 300;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    transition: all 0.2s;
+    box-shadow: 0 4px 20px rgba(37, 99, 235, 0.4);
+}
+
+.reconnect-btn:hover {
+    background: linear-gradient(to bottom, #3b82f6, #2563eb);
+    box-shadow: 0 4px 30px rgba(59, 130, 246, 0.6);
+    transform: translateY(-1px);
+}
+
+.reconnect-btn:active { transform: translateY(0); }
+
+.reconnect-cancel-btn {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #6b7280;
+    padding: 10px 28px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: 'Titillium Web', sans-serif;
+    font-size: 14px;
+    font-weight: 300;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+}
+
+.reconnect-cancel-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #9ca3af;
+}
+
+.reconnect-progress {
+    width: 240px;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.reconnect-progress-bar {
+    height: 100%;
+    background: linear-gradient(to right, #1d4ed8, #3b82f6);
+    border-radius: 2px;
+    transition: width 0.1s linear;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>JaxxV6 Installer</title>
+  <meta name="description" content="Install JaxxV6 for the official Senpa web client.">
+  <style>
+    :root{color-scheme:dark;--bg:#070a0f;--card:#101722;--line:#26364a;--text:#e7f0fa;--muted:#91a5ba;--cyan:#49dcff;--cyan2:#2389ff}
+    *{box-sizing:border-box}html,body{min-height:100%;margin:0}body{display:grid;place-items:center;padding:28px;background:radial-gradient(circle at 50% 0,#132436 0,transparent 42%),var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}
+    main{width:min(720px,100%);padding:38px;border:1px solid var(--line);border-radius:20px;background:linear-gradient(145deg,rgba(20,30,43,.97),rgba(10,15,23,.97));box-shadow:0 28px 80px #0009}h1{margin:0;font-size:clamp(34px,7vw,64px);letter-spacing:-.05em}h1 span{color:var(--cyan)}.tag{margin:.25rem 0 2rem;color:var(--muted)}.install{display:inline-block;padding:13px 22px;border-radius:10px;background:linear-gradient(135deg,var(--cyan),var(--cyan2));color:#00131b;font-weight:800;text-decoration:none;box-shadow:0 8px 30px #2389ff44}.install:hover{filter:brightness(1.1)}ol{margin:2rem 0 0;padding-left:1.4rem}li{margin:.65rem 0}code{padding:.15rem .4rem;border:1px solid #29394e;border-radius:5px;background:#0a1018;color:#7de8ff}.note{margin-top:2rem;padding:14px 16px;border-left:3px solid #ffbe55;background:#17150f;color:#d9c8a8}.foot{margin-top:1.5rem;color:#71869c;font-size:.88rem}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Jaxx<span>V6</span></h1>
+    <p class="tag">The custom client, loaded on Senpa's official web origin.</p>
+    <a class="install" href="./jaxxv6.user.js">Install Tampermonkey script</a>
+    <ol>
+      <li>Install the Tampermonkey browser extension.</li>
+      <li>Click the install button above and confirm the script.</li>
+      <li>Open <a href="https://senpa.io/web/">senpa.io/web/</a>.</li>
+    </ol>
+    <div class="note">Do not open <code>client.html</code> directly. The userscript must run it on <code>senpa.io</code> so the game server sees Senpa's official browser origin and your normal connection.</div>
+    <p class="foot">JaxxV6 uses a direct WebSocket connection. GitHub Pages only hosts the static client files.</p>
+  </main>
+</body>
+</html>
